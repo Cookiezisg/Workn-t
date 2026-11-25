@@ -313,6 +313,9 @@ async function startSlack($: $, c: Ctx): Promise<void> {
   const site = settings.site
   if (c.slack !== null || site === null || !isAwake(c)) return
   const now = await $.clock.now()
+  // Say so before doing it: opening the tab takes seconds, and until the line changes the person keeps pressing.
+  c.setup = null
+  await setBand($, c, { kind: 'opening', isSlow: false })
   const before = await readPane($)
   if (before !== null) rememberTabs(c, now, before.tabs)
   // S-2: the pane as it stands at this click, to put back later. Where it cannot be seen, nothing is put back.

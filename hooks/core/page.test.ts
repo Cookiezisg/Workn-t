@@ -230,6 +230,20 @@ test('section 3, S-5: the feed address with nothing recognisable is "loading" at
   expect(page.ask().health).toBe('unknown')
 })
 
+test('section 3: a live stream in the feed is still the feed: the layout does not flip when one scrolls by', () => {
+  const { page } = feed()
+  page.sync(want('play'))
+  expect(page.hasCss()).toBe(true)
+  // The next slide is a live stream: no clip of the usual kind, and none of the markers a clip carries.
+  page.videos.length = 0
+  page.selectors['[data-e2e="feed-active-video"]'] = []
+  page.selectors['#slidelist'] = [{}]
+  page.run(20_000)
+  expect(page.ask().health).toBe('feed')
+  expect(page.hasCss()).toBe(true)
+  expect(page.hasHost()).toBe(false)
+})
+
 // ---- principle 3 and W-5 -------------------------------------------------------------
 
 test('S-5: on the feed the site navigation is hidden and the clip plays', () => {

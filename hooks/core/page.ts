@@ -21,7 +21,7 @@ import type { PageStats, PageWant, SiteId } from './types'
  * is therefore decided here, not by a round trip to the mod.
  */
 
-export const PAGE_VERSION = 20
+export const PAGE_VERSION = 21
 
 export type PageConfig = {
   v: number
@@ -210,8 +210,13 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
           : /^\/(foryou\/?|[a-z]{2}(-[A-Za-z]{2})?\/?)?$/.test(path)
       if (!isFeedRoute) return 'elsewhere'
 
-      var hasAnchor = site === 'douyin' ? !!(W.one('#douyin-right-container') && W.one('[data-e2e="feed-active-video"]')) : !!W.one('main')
-      if (hasAnchor && W.all('video').length > 0) return 'feed'
+      // The feed is told by its frame, not by what is in the slide: a live stream in the feed
+      // has no clip of the usual kind, and is still the feed.
+      var hasAnchor =
+        site === 'douyin'
+          ? !!(W.one('#douyin-right-container') && (W.one('#slidelist') || W.one('[data-e2e="slideList"]') || W.one('[data-e2e="feed-active-video"]')))
+          : !!W.one('main')
+      if (hasAnchor && (W.all('video').length > 0 || now() - W.routeSince > 3000)) return 'feed'
       return now() - W.routeSince < 8000 ? 'loading' : 'unknown'
     }
 
