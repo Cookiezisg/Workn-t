@@ -132,8 +132,8 @@ export type Card = {
   secondary: CardButton | null
   /** C-9: the secondary button's label on its 2nd, 3rd... press. */
   moreLabels: string[]
-  /** Past the last label, the button goes round again from this one. */
-  moreLoopFrom: number
+  /** C-14: what the secondary button says once those are used up. Pressing it sends the card away for good. */
+  freeLabel: string
   /** What `lines` is replaced by once "one more" has run out. */
   againLine: string
   /** The same from the second extra clip on, with `{n}` for how many there have been. */
@@ -155,9 +155,9 @@ export type PageWant = {
 /**
  * Something the person did on the page that the mod must act on. `skip` is the
  * page asking for the key that moves the feed on; `set` carries a choice from
- * the page's menu as `<setting> <value>`.
+ * the page's menu as `<setting> <value>`; `free` carries the id of the card told to stay away (C-14).
  */
-export type PageAct = { n: number; id: 'back' | 'more' | 'stay' | 'home' | 'skip' | 'set'; arg?: string }
+export type PageAct = { n: number; id: 'back' | 'more' | 'stay' | 'home' | 'skip' | 'set' | 'free'; arg?: string }
 
 /** What the page answers every time it is asked. */
 export type PageStats = {

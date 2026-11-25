@@ -21,7 +21,7 @@ import type { PageStats, PageWant, SiteId } from './types'
  * is therefore decided here, not by a round trip to the mod.
  */
 
-export const PAGE_VERSION = 25
+export const PAGE_VERSION = 26
 
 export type PageConfig = {
   v: number
@@ -90,6 +90,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       framesOk: true,
       more: null,
       moreCount: 0,
+      freed: null,
       idleAsk: false,
       userPaused: false,
       oursUntil: 0,
@@ -382,14 +383,16 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       return e
     }
 
-    /** C-9: the "one more" button's words for the press to come. Past the last of them it goes round again, never back to the first. */
+    /** C-9, C-14: the second button's words for the press to come: "one more" while there are any left, then "leave me alone". */
     W.moreLabel = function (card: any): string {
       var labels = card.moreLabels || []
-      var n = W.moreCount
-      if (n < labels.length) return labels[n]
-      var from = Math.max(0, Math.min(card.moreLoopFrom || 0, labels.length - 1))
-      var span = labels.length - from
-      return span > 0 ? labels[from + ((n - from) % span)] : ''
+      if (W.moreCount < labels.length) return labels[W.moreCount]
+      return card.freeLabel || labels[labels.length - 1] || ''
+    }
+
+    /** C-14: the person has told this card to leave them alone. It stays away; a different card is a new matter. */
+    W.isFreed = function (): boolean {
+      return !!W.want.card && W.freed === W.want.card.id
     }
 
     W.isDark = function (): boolean {
@@ -414,6 +417,14 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       }
       var card = W.want.card
       if (!card || !card.secondary) return
+      if (card.freeLabel && W.moreCount >= (card.moreLabels || []).length) {
+        // C-14: asked twice already. This time the answer is not one more clip but all of them.
+        W.freed = card.id
+        W.more = null
+        W.userPaused = false
+        W.act('free', card.id)
+        return
+      }
       var v = W.cur()
       W.moreCount += 1
       W.more = { key: W.key(v), lastT: v ? v.currentTime || 0 : 0, at: now(), isLive: W.isLive(v) }
@@ -684,13 +695,14 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       }
       if (mode !== 'card') W.more = null
 
-      var isRunning = isFeed && (mode === 'play' || (mode === 'card' && !!W.more))
+      var isFreed = mode === 'card' && W.isFreed()
+      var isRunning = isFeed && (mode === 'play' || (mode === 'card' && (!!W.more || isFreed)))
       if (isRunning && mode === 'play' && !W.idleAsk && v && !v.paused && t - W.lastInput > W.cfg.idleMs) {
         W.idleAsk = true // W-3
       }
       if (mode !== 'play') W.idleAsk = false
 
-      var showCard = isFeed && mode === 'card' && !W.more && !!W.want.card
+      var showCard = isFeed && mode === 'card' && !W.more && !isFreed && !!W.want.card
       var locked = showCard || W.idleAsk
       var shouldPlay = isRunning && !W.idleAsk && !W.want.hold && W.framesOk
 
@@ -743,7 +755,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       }
 
       // Why the clock is not running, when it is not: for the self-check.
-      W.why = !isFeed ? 'not-feed' : mode !== 'play' && !W.more ? 'mode-' + mode : W.idleAsk ? 'idle-ask' : W.want.hold ? 'held' : !W.framesOk ? 'unpainted' : !v ? 'no-video' : v.paused ? (W.userPaused ? 'paused-by-person' : 'paused') : v.ended ? 'ended' : ''
+      W.why = !isFeed ? 'not-feed' : mode !== 'play' && !W.more && !isFreed ? 'mode-' + mode : W.idleAsk ? 'idle-ask' : W.want.hold ? 'held' : !W.framesOk ? 'unpainted' : !v ? 'no-video' : v.paused ? (W.userPaused ? 'paused-by-person' : 'paused') : v.ended ? 'ended' : ''
 
       // W-10: only what was really on screen and really playing counts.
       if (isRunning && shouldPlay && v && !v.paused && !v.ended) {
@@ -933,6 +945,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       W.dwellKey = null
       W.dwellMs = 0
       W.acts = []
+      W.freed = null
       W.pick = {}
       W.menuOpen = false
       W.blocked = false

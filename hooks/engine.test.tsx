@@ -65,7 +65,7 @@ function makeApp(on: On, options: Options = {}) {
     return m ? `${m[1]}${m[2]}` : url
   }
   const stats = () => ({
-    v: 25, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
+    v: 26, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
     framesOk: true, inputAgo: 0, videos: app.videos, watchMs: app.watchMs, live: false, cardId: app.want?.card?.id ?? null, more: false, idleAsk: false, acts: app.acts, lost: false, err: null, steps: 0, why: '',
   })
 
@@ -822,4 +822,30 @@ test('R-4: a kept tab the person wandered off the feed in is taken back to the f
   world.app.health = 'feed'
   await world.clock.advance(2500)
   expect(world.app.want?.mode).toBe('play')
+})
+
+test('C-14: "leave me alone" keeps the card away for the rest of this round, says so once, and the next finished turn calls again', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  await endTurn($, world)
+  await world.clock.advance(1500)
+  const card = world.app.want?.card?.id ?? ''
+  expect(world.app.want?.mode).toBe('card')
+
+  world.app.acts = [{ n: 1, id: 'free', arg: card }]
+  await world.clock.advance(2500)
+  expect(world.app.want).toMatchObject({ mode: 'play', card: null, toast: { text: '行，这轮不管你了。' } })
+  expect((await world.band($)).text).toContain('摸鱼中')
+
+  // Nobody is working, twenty minutes go by, and the break is still theirs.
+  await world.clock.advance(20 * 60_000)
+  expect(world.report().claim).not.toBeNull()
+  expect(world.app.want).toMatchObject({ mode: 'play', card: null, toast: null })
+
+  // A new turn, finished: that is a new round.
+  await typedTurn($, world, 't2')
+  await endTurn($, world, 't2')
+  await world.clock.advance(1500)
+  expect(world.app.want?.mode).toBe('card')
+  expect(world.app.want?.card?.id).not.toBe(card)
 })

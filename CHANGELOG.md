@@ -2,7 +2,8 @@
 
 ## 0.2.1 (not released)
 
-- "One more" has more to say: after `One more` and `Last one, really` the button moves on to `Leave me alone`, `Let me have this` and a few others, and goes round again from there instead of stopping at one. From the second extra clip on, the card keeps count of them.
+- `Leave me alone`. After `One more` and `Last one, really`, the third time the card comes back its button no longer asks for one more clip: it sends the card away for the rest of that round. Clips play on, nothing locks, and the break is not ended for nobody working. The next thing to happen (another turn finishing, a session waiting on you) is a new card and calls you back as before.
+- From the second extra clip on, the card keeps count of them.
 
 ## 0.2.0 (2026-11-26)
 

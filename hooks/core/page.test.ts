@@ -175,7 +175,7 @@ const want = (mode: PageWant['mode'], patch: Partial<PageWant> = {}): PageWant =
 const CARD: Card = {
   id: 'd:a:1', title: 'Claude 跑完了', lines: ['用时 2:14', '你刷了 5 条，2:05'],
   primary: { id: 'back', label: '回去看看' }, secondary: { id: 'more', label: '再看一条' },
-  moreLabels: ['再看一条', '真的最后一条', '行吧'], moreLoopFrom: 1, againLine: '这条看完了。', againMany: '这条也看完了。已经多看 {n} 条了。',
+  moreLabels: ['再看一条', '真的最后一条'], freeLabel: '你别管我了', againLine: '这条看完了。', againMany: '这条也看完了。已经多看 {n} 条了。',
 }
 
 const feed = (site: SiteId = 'douyin') => {
@@ -340,21 +340,45 @@ test('C-9: "one more" plays one clip to its end, then the card is back with the 
   page.run(500)
   video.currentTime = 0.1
   page.run(500)
-  // From the second extra clip on, the card keeps count.
-  expect(page.drawn()).toEqual(['Claude 跑完了', '这条也看完了。已经多看 2 条了。', '回去看看', '行吧'])
-  page.press('行吧')
-  video.currentTime = 5
+  // From the second extra clip on, the card keeps count; and the button has stopped asking for one more.
+  expect(page.drawn()).toEqual(['Claude 跑完了', '这条也看完了。已经多看 2 条了。', '回去看看', '你别管我了'])
+})
+
+test('C-14: asked for one more twice, the third press sends the card away: clips play on, one after another, nothing locked', () => {
+  const { page, video } = feed()
+  page.sync(want('play'))
+  page.sync(want('card', { card: CARD }))
+  for (const label of ['再看一条', '真的最后一条']) {
+    page.press(label)
+    video.currentTime = 9
+    page.run(500)
+    video.currentTime = 0.1
+    page.run(500)
+  }
+  expect(page.drawn().at(-1)).toBe('你别管我了')
+  expect(video.paused).toBe(true)
+
+  page.press('你别管我了')
+  expect(page.ask().acts.at(-1)).toEqual({ n: 3, id: 'free', arg: CARD.id })
+  expect(video.paused).toBe(false)
+  expect(page.hasHost()).toBe(false)
+  expect(page.key('keydown', 'ArrowDown').wasStopped).toBe(false)
+
+  // The clip ends, the next one comes, minutes pass: the mod still says "card", and the card still stays away.
+  video.currentTime = 14
   page.run(500)
-  video.currentTime = 0
-  page.run(500)
-  // Past the last label the button goes round again from where the card says, never back to the first.
-  expect(page.drawn()).toEqual(['Claude 跑完了', '这条也看完了。已经多看 3 条了。', '回去看看', '真的最后一条'])
-  page.press('真的最后一条')
-  video.currentTime = 5
-  page.run(500)
-  video.currentTime = 0
-  page.run(500)
-  expect(page.drawn().at(-1)).toBe('行吧')
+  video.currentTime = 0.2
+  page.live(5 * 60_000 - 20_000)
+  page.sync(want('card', { card: CARD }), 3)
+  expect(page.hasHost()).toBe(false)
+  expect(video.paused).toBe(false)
+  // And the time goes on being counted.
+  expect(page.ask().watchMs).toBeGreaterThan(4 * 60_000)
+
+  // A different card is a new matter, and starts from "one more" again.
+  page.sync(want('card', { card: { ...CARD, id: 'd:a:2' } }), 3)
+  expect(video.paused).toBe(true)
+  expect(page.drawn().at(-1)).toBe('再看一条')
 })
 
 test('C-9: swiping to the next clip during "one more" lets that clip play to its end', () => {

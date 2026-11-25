@@ -19,7 +19,7 @@ const page = (patch: Partial<PageStats> = {}): PageStats => ({
 
 const slack = (patch: Partial<Slack> = {}): Slack => ({
   startedAt: NOW - 60_000, site: 'douyin', tabId: 'feed', scene: { isPaneOpen: false, activeTab: null }, isManual: false, stage: 'live',
-  sawLogin: false, silentSince: 0, openedAt: NOW - 60_000, patienceMs: 0, seenAt: NOW, cardSince: 0, cardId: null,
+  sawLogin: false, silentSince: 0, openedAt: NOW - 60_000, patienceMs: 0, seenAt: NOW, cardSince: 0, cardId: null, freedCard: null,
   quietSince: 0, toasted: {}, toast: null, counted: { load: 1, videos: 0, watchMs: 0 }, ackedActs: 0, watchMs: 125_000, videos: 5, ...patch,
 })
 
@@ -49,8 +49,8 @@ test('C-1: when the only session finishes, a card says so with how long it took'
   expect(d.want.card?.title).toBe('Claude 跑完了')
   expect(d.want.card?.lines[0]).toBe('用时 2:14')
   expect(d.want.card?.primary).toEqual({ id: 'back', label: '回去看看' })
-  expect(d.want.card?.moreLabels.slice(0, 4)).toEqual(['再看一条', '真的最后一条', '你别管我了', '让我玩吧'])
-  expect(d.want.card?.moreLoopFrom).toBe(2)
+  expect(d.want.card?.moreLabels).toEqual(['再看一条', '真的最后一条'])
+  expect(d.want.card?.freeLabel).toBe('你别管我了')
   expect(d.band).toEqual({ kind: 'card', text: 'Claude 跑完了' })
 })
 
@@ -213,6 +213,23 @@ test('a break asked for by command plays with nobody working, is not ended for q
   // A turn that finishes after it began still freezes it under a card.
   const done = decideHost(host({ reports: [rep('a', { status: 'done', since: NOW - 1000, seq: 1 })], slack: slack({ isManual: true }) }))
   expect(done.kind === 'page' && done.want.mode).toBe('card')
+})
+
+test('C-14: a card told to leave them alone stays away and the clips play on; the next thing to happen is a new card', () => {
+  const done = rep('a', { status: 'done', since: NOW - 1000, seq: 1 })
+  const shown = decideHost(host({ reports: [done] }))
+  const id = shown.kind === 'page' ? (shown.want.card?.id ?? '') : ''
+  expect(id).not.toBe('')
+
+  const freed = decideHost(host({ reports: [done], slack: slack({ freedCard: id, quietSince: NOW - 11 * 60_000 }) }))
+  expect(freed.kind === 'page' && freed.want).toMatchObject({ mode: 'play', card: null })
+  expect(freed.kind === 'page' && freed.band.kind).toBe('slack')
+
+  // The same session finishing another turn, or another session waiting, is not the card that was sent away.
+  const again = decideHost(host({ reports: [rep('a', { status: 'done', since: NOW - 500, seq: 2 })], slack: slack({ freedCard: id }) }))
+  expect(again.kind === 'page' && again.want.mode).toBe('card')
+  const waiting = decideHost(host({ reports: [done, rep('b', { status: 'waiting', wait: 'approval', since: NOW - 100 })], slack: slack({ freedCard: id }) }))
+  expect(waiting.kind === 'page' && waiting.want.card?.title).toContain('在等你点头')
 })
 
 // ---- a guest: section 4 --------------------------------------------------------------

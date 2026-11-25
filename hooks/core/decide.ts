@@ -73,7 +73,7 @@ export function decideHost(w: HostWorld): HostDecision {
   if (slack.cardSince > 0 && now - slack.cardSince >= CARD_TIMEOUT_MS) return { kind: 'end', why: 'timeout' }
   if (now - slack.seenAt >= AWAY_MS) return { kind: 'end', why: 'away' }
   // A break the person asked for by command stays for as long as they do: W-3 and the away rule still watch for an empty chair.
-  if (!slack.isManual && slack.cardSince === 0 && slack.quietSince > 0 && now - slack.quietSince >= QUIET_MS) return { kind: 'end', why: 'idle' }
+  if (!slack.isManual && slack.freedCard === null && slack.cardSince === 0 && slack.quietSince > 0 && now - slack.quietSince >= QUIET_MS) return { kind: 'end', why: 'idle' }
 
   const waiting = w.reports.filter(report => report.status === 'waiting').sort((a, b) => a.since - b.since)
   const working = w.reports.filter(report => report.status === 'working' || report.status === 'self')
@@ -95,7 +95,7 @@ export function decideHost(w: HostWorld): HostDecision {
       primary: { id: 'back', label: copy.attend },
       secondary: { id: 'more', label: copy.more[0] ?? '' },
       moreLabels: [...copy.more],
-      moreLoopFrom: copy.moreLoopFrom,
+      freeLabel: copy.free,
       againLine: copy.again,
       againMany: copy.againMany,
     }
@@ -122,11 +122,15 @@ export function decideHost(w: HostWorld): HostDecision {
       primary: { id: 'back', label: copy.back },
       secondary: { id: 'more', label: copy.more[0] ?? '' },
       moreLabels: [...copy.more],
-      moreLoopFrom: copy.moreLoopFrom,
+      freeLabel: copy.free,
       againLine: copy.again,
       againMany: copy.againMany,
     }
   }
+
+  // C-14: told to leave them alone, this card stays away. Anything new (another finish, somebody waiting) is a different card.
+  const isFreed = card !== null && card.id === slack.freedCard
+  if (isFreed) card = null
 
   const hold = !w.isVisible
 
@@ -185,7 +189,7 @@ export function decideHost(w: HostWorld): HostDecision {
   return {
     kind: 'page',
     // C-5: nobody working and nothing to announce means the person stopped it themselves.
-    want: { mode: working.length > 0 || slack.isManual ? 'play' : 'paused', hold, card: null, note: null, toast },
+    want: { mode: working.length > 0 || slack.isManual || isFreed ? 'play' : 'paused', hold, card: null, note: null, toast },
     band: { kind: 'slack', watchMs: slack.watchMs, videos: slack.videos },
     isQuiet,
     toasted,

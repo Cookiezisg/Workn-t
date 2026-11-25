@@ -37,7 +37,7 @@ const bandAtom = atom(
   { view: { kind: 'none' }, lang: 'en', site: null } as Band,
   { shape: 'band-3' },
 )
-const slackAtom = atom({ plugin: 'worknt', key: 'slack' } as const, null as Slack | null, { shape: 'slack-3' })
+const slackAtom = atom({ plugin: 'worknt', key: 'slack' } as const, null as Slack | null, { shape: 'slack-4' })
 const lingerAtom = atom({ plugin: 'worknt', key: 'linger' } as const, null as Linger | null, { shape: 'linger-1' })
 
 const NO_DAY = { agentMs: 0, watchMs: 0, videos: 0 }
@@ -456,6 +456,7 @@ async function startSlack($: $, c: Ctx, isManual: boolean): Promise<void> {
     seenAt: now,
     cardSince: 0,
     cardId: null,
+    freedCard: null,
     quietSince: 0,
     toasted: {},
     toast: null,
@@ -663,6 +664,12 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
       note(c.log, now, `a live stream came up (told by its ${act.arg ?? '?'}): pressed down (${isPressed ? 'ok' : 'refused'})`)
     }
     else if (act.id === 'set') await setFromPage($, c, act.arg)
+    else if (act.id === 'free' && typeof act.arg === 'string') {
+      // C-14: the card is not to come back, and a toast says that was understood.
+      slack.freedCard = act.arg
+      slack.toast = { id: `free:${act.arg}`, text: copyOf(c).freed, until: now + TOAST_MS }
+      note(c.log, now, 'told to leave them alone this round')
+    }
   }
 
   const want = decision.want

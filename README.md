@@ -15,7 +15,7 @@ Claude 干活的时候，在它的浏览器面板里刷会儿视频。它先问�
 1. You send Claude a task. Once it has been working for 8 seconds, a line above the prompt asks: `Watch some TikTok?`
 2. Say no and nothing happens: nothing loads, nothing plays.
 3. Say yes and the feed loads out of sight, then appears in the browser pane, already playing. It is the real Douyin or TikTok site, signed in as you, with the site's own navigation hidden while you are on the feed.
-4. When Claude finishes, the video freezes under a card: `Claude is done. Took 2:14.` `Back to work` puts the pane back the way it was. `One more` plays one more clip.
+4. When Claude finishes, the video freezes under a card: `Claude is done. Took 2:14.` `Back to work` puts the pane back the way it was. `One more` plays one more clip, twice; the third time the button says `Leave me alone`, and the card stays away for the rest of that round.
 5. If Claude stops to ask you something, or to get your approval, the card says that instead.
 
 Across sessions:
@@ -128,7 +128,7 @@ Workn't is an independent project, not affiliated with, endorsed by, or sponsore
 1. 你给 Claude 派个活。它干了 8 秒之后，输入框上方出现一行：`刷会儿抖音？`
 2. 点“不用”，什么都不会发生：不加载，不播放。
 3. 点“好”，视频流在后台加载，准备好了才出现在浏览器面板里，出现时已经在播。它是真的抖音或 TikTok 网站，登录的是你自己的账号；你在推荐流里的时候，网站自带的导航被藏起来。
-4. Claude 跑完，视频定格，出一张卡片：`Claude 跑完了，用时 2:14`。`回去看看` 把面板恢复原样，`再看一条` 再放一条。
+4. Claude 跑完，视频定格，出一张卡片：`Claude 跑完了，用时 2:14`。`回去看看` 把面板恢复原样，`再看一条` 再放一条，可以要两次；第三次按钮变成 `你别管我了`，按下去这一轮卡片就不再回来。
 5. 如果 Claude 停下来问你问题，或者等你批准，卡片上写的就是那件事。
 
 多个会话之间：
