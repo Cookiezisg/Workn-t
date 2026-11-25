@@ -30,6 +30,16 @@ Across sessions:
 
 It stops by itself when you are not watching: when you switch tabs, hide the pane, switch sessions, cover the Claude window with another app, or touch nothing for five minutes.
 
+If you leave a break while Claude is still working, it does not ask you again in that turn. The line says the page is still open and offers to resume.
+
+### Install
+
+```
+/plugin install worknt --marketplace Cookiezisg/Workn-t
+```
+
+Until 0.2.0 is released this installs 0.1.1; see the status note above. To update later, run `/plugin update worknt` and start a new session.
+
 ### Requirements
 
 - The Claude desktop app, Code tab. It needs that app's browser pane; in a terminal session it stays asleep.
@@ -42,14 +52,21 @@ By default the browser pane forgets your sign-ins when Claude quits, and keeps a
 
 Shared means every session's browser carries your sign-ins. While Workn't is on, it keeps Claude off the video sites (see Privacy). Turn it off and Claude can reach them.
 
-### Commands
+### Settings
+
+Three ways in, one set of settings, applied to every session at once. No restart.
+
+- **The settings pane.** Type `/worknt`. Every setting is a row of buttons with the current choice lit, followed by today's and yesterday's tally and a self-check button.
+- **The ⋯ on the video page.** Top right. It shows for a few seconds as a clip starts and again whenever the pointer moves. It holds the two settings you want while watching, sound and live streams, and `Back to work`.
+- **Commands**, below.
 
 | Command | What it does |
 | --- | --- |
-| `/worknt` | Shows the current settings |
+| `/worknt` | Opens the settings pane and shows the current settings |
 | `/worknt on` · `off` | The main switch. Off also lifts the guard |
 | `/worknt douyin` · `tiktok` | Source |
 | `/worknt sound on` · `off` | Sound |
+| `/worknt live show` · `skip` | Live streams in the feed: leave them, or move past them |
 | `/worknt lang zh` · `en` | Language |
 | `/worknt delay <seconds>` | How long Claude works before it asks |
 | `/worknt idle <minutes>` | How long without input counts as gone |
@@ -57,31 +74,40 @@ Shared means every session's browser carries your sign-ins. While Workn't is on,
 | `/worknt here off` · `here on` | Never show up in this project |
 | `/worknt bill` | Today's and yesterday's tally |
 | `/worknt doctor` | What the mod thinks is going on, for when it does not behave |
-| `/worknt reset` | Clears settings and records |
-
-Changes apply to every session at once. No restart.
+| `/worknt reset` | Clears settings, records and logs |
 
 ### Privacy
 
 - **Claude is kept off the video sites.** While Workn't is on, the model cannot navigate to Douyin or TikTok, and cannot read or control any tab that is on them, whoever opened it. Calls hidden in a batch are checked one by one. Tab titles and addresses on those sites are blanked from what the model is shown. If the guard itself breaks, browser calls are refused, not let through.
 - **Stored on your machine only:** your settings, per-day totals (how long Claude worked, how long you watched, how many clips), and a log of state changes and errors. Never what you watched. Never anything about your account.
 - **Nothing is sent anywhere.**
-- **It does not click for you.** No consent boxes, no dialogs, nothing on the site.
+- **It does not click for you.** No consent boxes, no dialogs, nothing on the site. One exception, and only if you turn it on: with live streams set to skip, it presses ↓ to move past one.
+- **What it hides.** While you are on the feed, the site's top bar and side navigation. Nothing inside a video: labels, author, buttons all stay. Leave the feed, or end the break, and they are back.
 
 ### Known limits
 
 - The sites change. The mod recognises the feed by page structure; when it no longer does, it shows the site as it is and says so, rather than a broken layout.
 - A site can sign you out on its own (it happened during testing). You are shown the site's own sign-in, and the feed starts by itself afterwards.
 - Jumping from the card to another session is not possible; the card names the session.
-- Not yet built: a settings panel, a tally beyond yesterday.
+- Skipping live streams has not been tried on a real live stream yet. If one is not recognised, nothing happens and it plays like any clip.
+- The tally covers today and yesterday.
 - Tested on macOS only.
+
+### Uninstall
+
+1. `/worknt reset` ends any break, closes the video page, and clears settings, records and logs.
+2. `/plugin uninstall worknt`.
+3. One folder is left behind, because a mod cannot delete files: `~/.claude/plugins/data/worknt`. Delete it yourself if you want nothing left.
 
 ### Development
 
 ```bash
 claude plugin validate .
 claude plugin test .
+git config core.hooksPath .githooks   # once: runs both before every commit
 ```
+
+Changes are listed in `CHANGELOG.md`.
 
 `docs/spec.md` (in Chinese) is the rule book: every behaviour has a numbered rule, and every test names the rule it checks.
 
@@ -114,6 +140,16 @@ Workn't is an independent project, not affiliated with, endorsed by, or sponsore
 
 你没在看的时候它会自己停：切了标签页、收了面板、换了会话、Claude 窗口被别的应用挡住，或者五分钟没有任何操作。
 
+Claude 还在干活的时候你自己走开了，这个回合里它不会再问你。状态带上写着页面还开着，可以接着刷。
+
+### 安装
+
+```
+/plugin install worknt --marketplace Cookiezisg/Workn-t
+```
+
+0.2.0 发布之前，这条命令装到的是 0.1.1，见上面的状态说明。以后更新：运行 `/plugin update worknt`，然后新开一个会话。
+
 ### 需要什么
 
 - Claude 桌面版的 Code 标签。它依赖桌面版的浏览器面板；在终端会话里它保持休眠。
@@ -126,14 +162,21 @@ Workn't is an independent project, not affiliated with, endorsed by, or sponsore
 
 Shared 意味着所有会话的浏览器都带着你的登录。Workn't 开着的时候，它不让 Claude 碰视频网站（见“隐私”）；关掉之后 Claude 就能访问。
 
-### 命令
+### 设置
+
+三个入口，改的是同一份设置，对所有会话立刻生效，不用重启。
+
+- **设置面板。** 输入 `/worknt`。每个设置是一行按钮，当前的选择亮着；下面是今天和昨天的账单，还有一个自查按钮。
+- **视频页上的 ⋯。** 在右上角。视频开始时露面几秒，之后鼠标一动就出现。里面是看的时候会想改的两项，声音和直播，以及 `回去看看`。
+- **命令**，见下表。
 
 | 命令 | 作用 |
 | --- | --- |
-| `/worknt` | 显示当前设置 |
+| `/worknt` | 打开设置面板，并显示当前设置 |
 | `/worknt on` · `off` | 总开关。关掉后守卫也解除 |
 | `/worknt douyin` · `tiktok` | 换片源 |
 | `/worknt sound on` · `off` | 声音 |
+| `/worknt live show` · `skip` | 推荐流里的直播：照常显示，或者自动划走 |
 | `/worknt lang zh` · `en` | 语言 |
 | `/worknt delay <秒>` | Claude 干多久之后再问 |
 | `/worknt idle <分钟>` | 多久没动算走开 |
@@ -141,24 +184,34 @@ Shared 意味着所有会话的浏览器都带着你的登录。Workn't 开着�
 | `/worknt here off` · `here on` | 在当前项目里不出现 |
 | `/worknt bill` | 今天和昨天的账单 |
 | `/worknt doctor` | 它不对劲的时候，看它自己认为发生了什么 |
-| `/worknt reset` | 清空设置和记录 |
-
-改动对所有会话立刻生效，不用重启。
+| `/worknt reset` | 清空设置、记录和日志 |
 
 ### 隐私
 
 - **Claude 碰不到视频网站。** Workn't 开着时，模型不能导航到抖音或 TikTok，也不能读取或操作任何处在这两个网站上的标签页，不管是谁打开的。藏在批量操作里的调用逐个检查。给模型看的内容里，这些标签页的标题和地址会被抹掉。守卫自己出故障时，浏览器操作一律拒绝，不放行。
 - **只存在你电脑上的：** 你的设置、每天的合计（Claude 干了多久、你看了多久、几条）、状态变化和错误的日志。不存你看了什么，不存任何账号信息。
 - **不向任何地方发送任何东西。**
-- **不替你点任何东西。** 同意框、弹窗、网站上的任何按钮都不点。
+- **不替你点任何东西。** 同意框、弹窗、网站上的任何按钮都不点。只有一个例外，而且要你自己打开：直播设成“划走”之后，它会替你按 ↓ 把直播划过去。
+- **它藏了什么。** 你在推荐流里的时候，网站的顶栏和侧边导航。视频里面的东西一样不动：标签、作者、按钮都在。离开推荐流或者结束摸鱼，藏起来的立刻回来。
 
 ### 已知的限制
 
 - 网站会改版。mod 靠页面结构认出推荐流；认不出时会原样显示网站并告诉你，而不是给你一个坏掉的布局。
 - 网站可能单方面让你的登录失效（测试中发生过）。这时显示的是网站自己的登录界面，登录后自动开始。
 - 没法从卡片直接跳到另一个会话，卡片上会写明是哪个。
-- 还没做的：设置面板、昨天以前的账单。
+- “直播划走”还没在真的直播上试过。认不出来的时候什么都不会发生，直播像普通视频一样播。
+- 账单只有今天和昨天。
 - 只在 macOS 上测试过。
+
+### 卸载
+
+1. `/worknt reset`：结束摸鱼，关闭视频页，清空设置、记录和日志。
+2. `/plugin uninstall worknt`。
+3. 会留下一个文件夹，因为 mod 删不了文件：`~/.claude/plugins/data/worknt`。想一点不留，自己删掉它。
+
+### 开发
+
+`docs/spec.md` 是规则书：每个行为有一条带编号的规则，每个测试写明它检查的是哪条。改动记在 `CHANGELOG.md`。
 
 ### 声明
 

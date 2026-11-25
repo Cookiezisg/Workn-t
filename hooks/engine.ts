@@ -363,9 +363,11 @@ export async function openPanel($: $, c: Ctx): Promise<boolean> {
   c.panelDoctor = null
   await enqueue(c, () => refreshPanel($, c))
   try {
-    const got = (await $.ui.open({ id: PANE_ID, title: 'Workn’t' })) as { isPlaced?: unknown }
+    const got = (await $.ui.open({ id: PANE_ID, title: 'Workn’t' })) as { isPlaced?: unknown; reason?: unknown }
+    note(c.log, await $.clock.now(), `settings pane opened: placed=${String(got?.isPlaced)}${got?.reason ? ` (${String(got.reason)})` : ''}`)
     return got?.isPlaced === true
-  } catch {
+  } catch (err) {
+    fail(c, await $.clock.now(), 'pane', err)
     return false
   }
 }
@@ -646,7 +648,10 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
     if (act.n <= slack.ackedActs) continue
     slack.ackedActs = act.n
     if (act.id === 'home') await navigate($, slack.tabId, SITES[slack.site].feedUrl) // W-5
-    else if (act.id === 'skip') await pressKey($, slack.tabId, 'ArrowDown')
+    else if (act.id === 'skip') {
+      const isPressed = await pressKey($, slack.tabId, 'ArrowDown')
+      note(c.log, now, `a live stream came up: pressed down (${isPressed ? 'ok' : 'refused'})`)
+    }
     else if (act.id === 'set') await setFromPage($, c, act.arg)
   }
 
@@ -959,7 +964,13 @@ async function devRemote($: $, c: Ctx): Promise<void> {
     const isFirstLook = c.devN === -1
     c.devN = asked.n
     // A request left over from before this load is not for us.
-    if (!isFirstLook && typeof asked.press === 'string') await press($, c, asked.press as Press)
+    if (!isFirstLook && typeof asked.press === 'string') {
+      // `cmd:<words>` runs the command as typed; `key:<name>` presses a key in the video tab; anything else is a button.
+      if (asked.press.startsWith('cmd:')) void command($, c, asked.press.slice(4))
+      else if (asked.press.startsWith('key:')) {
+        if (c.slack !== null) await pressKey($, c.slack.tabId, asked.press.slice(4))
+      } else await press($, c, asked.press as Press)
+    }
   }
   try {
     await $.fs.write(`${c.p.root}/dev-doctor.txt`, `${await doctor($, c)}\nband: ${c.lastBand}\n`)
@@ -995,7 +1006,7 @@ async function doctor($: $, c: Ctx): Promise<string> {
   if (slack !== null) {
     lines.push(`break: ${slack.stage} site=${slack.site} tab=${slack.tabId} for ${Math.round((now - slack.startedAt) / 1000)}s card=${slack.cardId ?? '-'} watched=${Math.round(slack.watchMs / 1000)}s/${slack.videos}`)
     const page = c.lastPage
-    lines.push(page ? `page: mode=${page.mode} health=${page.health} playing=${page.playing} frames=${page.framesOk} idle=${Math.round(page.inputAgo / 1000)}s lost=${page.lost}` : 'page: no answer')
+    lines.push(page ? `page: mode=${page.mode} health=${page.health} playing=${page.playing} live=${page.live} frames=${page.framesOk} idle=${Math.round(page.inputAgo / 1000)}s lost=${page.lost}` : 'page: no answer')
   } else {
     lines.push(`break: none${c.lastWhy ? ` (last ended: ${c.lastWhy})` : ''}${c.linger ? ` · tab ${c.linger.tabId} kept for ${Math.max(0, Math.round((c.linger.until - now) / 1000))}s` : ''}`)
   }

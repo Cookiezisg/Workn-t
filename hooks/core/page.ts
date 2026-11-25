@@ -106,6 +106,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       toastUntil: 0,
       silenced: [],
       volTouched: false,
+      pressing: false,
       blocked: false,
       menuOpen: false,
       pick: {},
@@ -429,6 +430,8 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         dark ? 'd' : 'l',
       ].join('|')
       if (sig === W.drawn) return
+      // Never rebuild under a finger: a button replaced between press and release gets no click.
+      if (W.pressing && W.host) return
       W.drawn = sig
       W.clear()
       if (!locked && !note && !toast && !gear && !cue) return
@@ -445,6 +448,9 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         'all:initial;position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;pointer-events:' +
         (locked ? 'auto;background:rgba(0,0,0,.6);justify-content:flex-end;' : 'none;background:transparent;justify-content:space-between;')
       var root = host.attachShadow ? host.attachShadow({ mode: 'closed' }) : host
+      host.addEventListener('pointerdown', function () {
+        W.pressing = true
+      })
       doc.documentElement.appendChild(host)
       W.host = host
       W.root = root
@@ -766,7 +772,8 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
     W.touched = function (e: any): void {
       var t = now()
       W.lastInput = t
-      if (e && (e.type === 'mousemove' || e.type === 'pointerdown')) {
+      if (e && (e.type === 'pointerup' || e.type === 'pointercancel')) W.pressing = false
+      if (e && e.type === 'mousemove') {
         var wasOut = t - W.lastMove >= 2500
         W.lastMove = t
         if (wasOut && W.view.live) W.draw()
@@ -792,7 +799,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       }
     }
 
-    var TOUCH = ['pointerdown', 'keydown', 'wheel', 'touchstart', 'mousemove']
+    var TOUCH = ['pointerdown', 'pointerup', 'pointercancel', 'keydown', 'wheel', 'touchstart', 'mousemove']
     var MEDIA = ['play', 'pause', 'volumechange']
 
     W.frame = function (): void {
@@ -820,6 +827,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       for (var j = 0; j < MEDIA.length; j++) doc.removeEventListener(MEDIA[j], W.media, true)
       win.clearInterval(W.timer)
       if (win.cancelAnimationFrame) win.cancelAnimationFrame(W.raf)
+      W.pressing = false
       if (W.locked) {
         W.locked = false
         W.listen(false)

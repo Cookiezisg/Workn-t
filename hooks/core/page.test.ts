@@ -153,6 +153,9 @@ function makePage(site: SiteId) {
     },
     media(type: string): void { for (const fn of [...(docListeners[type] ?? [])]) fn({ type }) },
     touch(): void { for (const fn of [...(winListeners.pointerdown ?? [])]) fn({ type: 'pointerdown', composedPath: () => [] }) },
+    up(): void { for (const fn of [...(winListeners.pointerup ?? [])]) fn({ type: 'pointerup', composedPath: () => [] }) },
+    hostEl: (): any => host(),
+    hostDown(): void { for (const fn of host()?.listeners.pointerdown ?? []) fn({ type: 'pointerdown' }) },
     move(): void { for (const fn of [...(winListeners.mousemove ?? [])]) fn({ type: 'mousemove', composedPath: () => [] }) },
     counts: () => ({ intervalsCleared, fullscreenExits, winListeners: Object.values(winListeners).flat().length, docListeners: Object.values(docListeners).flat().length }),
     state: (): any => win.__worknt,
@@ -711,6 +714,21 @@ test('T-1, S-6: the sound setting changed elsewhere reaches a clip already playi
   set('off')
   page.run(500)
   expect(video.muted).toBe(true)
+})
+
+test('T-1: nothing of ours is rebuilt between a press and its release, so the click lands', () => {
+  const { page } = feed()
+  page.cfg.menu = menuOf('on', 'show')
+  page.sync(want('play'))
+  page.move()
+  const before = page.hostEl()
+  page.hostDown()
+  // The button's time is up while the finger is down: it stays until the finger is lifted.
+  page.run(6000)
+  expect(page.hostEl()).toBe(before)
+  page.up()
+  page.run(500)
+  expect(page.hasHost()).toBe(false)
 })
 
 // ---- S-7 -----------------------------------------------------------------------------------
