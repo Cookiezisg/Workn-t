@@ -51,6 +51,10 @@ function makeApp(on: On, options: Options = {}) {
     watchMs: 0,
     /** Changes when the page starts over: a reload, or a new break on a kept page. */
     load: 1,
+    /** The slide in view is a live stream. */
+    live: false,
+    idleAsk: false,
+    more: false,
     paneOpens: 0,
     /** A browser tool that refuses every call for now; null when all answer. */
     failing: null as string | null,
@@ -68,7 +72,7 @@ function makeApp(on: On, options: Options = {}) {
   }
   const stats = () => ({
     v: 27, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
-    framesOk: true, inputAgo: 0, videos: app.videos, watchMs: app.watchMs, live: false, cardId: app.want?.card?.id ?? null, more: false, idleAsk: false, acts: app.acts, lost: false, err: null, steps: 0, why: '',
+    framesOk: true, inputAgo: 0, videos: app.videos, watchMs: app.watchMs, live: app.live, cardId: app.want?.card?.id ?? null, more: app.more, idleAsk: app.idleAsk, acts: app.acts, lost: false, err: null, steps: 0, why: '',
   })
 
   on('env.get', () => ({ value: HOME }))
@@ -138,9 +142,13 @@ function makeApp(on: On, options: Options = {}) {
       case 'navigate': {
         let tab = tabs.find(one => one.tabId === tabId)
         if (!tab && tabId === undefined) {
-          app.isPaneOpen = true
-          tab = { tabId: 'seed', origin: '', isActive: true }
-          tabs.push(tab)
+          // As the real tool does: with no tab named it acts on the one in front, and only opens the pane where there is none.
+          tab = tabs.find(one => one.isActive)
+          if (!tab) {
+            app.isPaneOpen = true
+            tab = { tabId: 'seed', origin: '', isActive: true }
+            tabs.push(tab)
+          }
         }
         if (!tab) return refused('no such tab')
         tab.origin = originOf(String(args.url))
@@ -313,7 +321,7 @@ test('I-1, I-2: the invitation comes after the delay for a typed turn, and never
   expect((await world.band($)).text).toBe('')
   await world.clock.advance(4000)
   const band = await world.band($)
-  expect(band.text).toBe('刷会儿TikTok？')
+  expect(band.text).toBe('刷会儿 TikTok？')
   expect(band.buttons).toEqual(['accept', 'decline'])
   expect(world.browserCalls('navigate')).toHaveLength(0) // principle 2: nothing loads before the click
 })
@@ -325,7 +333,7 @@ test('I-4, I-6: an invitation not taken goes away with the turn; three refusals 
     await typedTurn($, world, turn)
     await world.clock.advance(10_000)
     const band = await world.band($)
-    expect(band.text).toBe('刷会儿TikTok？')
+    expect(band.text).toBe('刷会儿 TikTok？')
     await band.press('decline')
     if (turn !== 't3') expect((await world.band($)).text).toBe('')
     if (turn !== 't3') await endTurn($, world, turn)
@@ -348,7 +356,7 @@ test('section 13: the first time, the line asks language, source and sound, save
   let band = await world.band($)
   await band.press('accept')
   band = await world.band($)
-  expect(band.buttons).toEqual(['lang-zh', 'lang-en'])
+  expect(band.buttons).toEqual(['lang-zh', 'lang-en', 'give-up'])
   await band.press('lang-zh')
   band = await world.band($)
   expect(band.text).toBe('看哪个？')
@@ -373,7 +381,7 @@ test('S-1 to S-8, C-1, C-9, R-3: a whole break, from the click to putting the pa
   expect(world.report().claim).not.toBeNull()
   expect(world.app.want?.mode).toBe('hold')
   expect(world.app.isPaneShown).toBe(false)
-  expect((await world.band($)).text).toBe('正在打开TikTok')
+  expect((await world.band($)).text).toBe('正在打开 TikTok')
 
   // S-5, S-8: once there is something to show, it is brought out and given the keyboard.
   world.app.health = 'feed'
@@ -434,7 +442,7 @@ test('S-4: a page that never loads: the line offers to wait or give up, and givi
   await (await world.band($)).press('accept')
   await world.clock.advance(17_000)
   const slow = await world.band($)
-  expect(slow.text).toBe('TikTok打开得有点慢')
+  expect(slow.text).toBe('TikTok 打开得有点慢')
   expect(slow.buttons).toEqual(['wait-more', 'give-up'])
   await slow.press('give-up')
   expect(world.report().claim).toBeNull()
@@ -564,7 +572,9 @@ test('P-1, P-3: with a break up, the model is kept off the video tab and its tab
   const read = (await $.tool.call({ tool: `${B}get_page_text`, tabId: feed })) as { deny?: string }
   expect(read.deny).toContain('/worknt off')
   const loose = (await $.tool.call({ tool: `${B}get_page_text` })) as { deny?: string }
-  expect(loose.deny).toContain('/worknt off') // W-9: the tab in front is the video
+  // W-9: the tab in front is the video. The model is told to use a tab of its own, not to have the person switch anything off.
+  expect(loose.deny).toContain('tabs_create')
+  expect(loose.deny).not.toContain('/worknt off')
   const own = (await $.tool.call({ tool: `${B}get_page_text`, tabId: 'work' })) as { deny?: string }
   expect(own.deny).toBeUndefined()
 
@@ -675,7 +685,7 @@ test('I-2, R-3: leaving a break mid-turn is not followed by an invitation; the l
   await (await world.band($)).press('give-up')
   await world.clock.advance(4000)
   const band = await world.band($)
-  expect(band.text).toBe('TikTok还开着')
+  expect(band.text).toBe('TikTok 还开着')
   expect(band.buttons).toEqual(['accept'])
   expect(world.settings().declines).toBe(0)
 
@@ -690,7 +700,7 @@ test('I-2, R-3: leaving a break mid-turn is not followed by an invitation; the l
   await endTurn($, world)
   await typedTurn($, world, 't2')
   await world.clock.advance(10_000)
-  expect((await world.band($)).text).toBe('刷会儿TikTok？')
+  expect((await world.band($)).text).toBe('刷会儿 TikTok？')
 })
 
 test('T-1: a choice on the page\'s menu becomes the setting, and the page is told so', async ($, on) => {
@@ -709,7 +719,8 @@ test('live streams: when the page asks, the mod presses the down key in the vide
   await watching($, world)
   const keys = () => world.calls.filter(call => call.tool === 'computer' && call.args.action === 'key')
   expect(keys()).toHaveLength(0)
-  world.app.acts = [{ n: 1, id: 'skip' }]
+  world.app.live = true
+  world.app.acts = [{ n: 1, id: 'skip', arg: 'mark' }]
   await world.clock.advance(2500)
   expect(keys()).toHaveLength(1)
   expect(keys()[0]?.args).toMatchObject({ text: 'ArrowDown', tabId: world.tabs.find(tab => tab.origin === 'https://tiktok.com')?.tabId })
@@ -780,7 +791,7 @@ test('X-4: a reset ends the break, forgets every setting, and empties the logs',
 test('/worknt go: the break starts now, with nobody working, and plays until the person is done with it', async ($, on) => {
   const world = makeApp(on, { settings: READY })
   await start($, world)
-  expect((await $.command.run({ command: 'worknt', args: 'go' } as never)).text).toBe('正在打开TikTok')
+  expect((await $.command.run({ command: 'worknt', args: 'go' } as never)).text).toBe('正在打开 TikTok')
   await world.clock.advance(2500)
   expect(world.app.want?.mode).toBe('play')
   expect((await $.command.run({ command: 'worknt', args: 'go' } as never)).text).toBe('已经开着了。')
@@ -803,7 +814,7 @@ test('/worknt go: asks what is not yet chosen first, and says so when switched o
   await start($, world)
   expect((await $.command.run({ command: 'worknt', args: 'go' } as never)).text).toContain('Pick a language')
   let band = await world.band($)
-  expect(band.buttons).toEqual(['lang-zh', 'lang-en'])
+  expect(band.buttons).toEqual(['lang-zh', 'lang-en', 'give-up'])
   await band.press('lang-zh')
   await (await world.band($)).press('site-tiktok')
   await (await world.band($)).press('sound-on')
@@ -1111,4 +1122,217 @@ test('W-10: a kept page that could not be put to rest still holds the last break
   expect((await world.band($)).text).toBe('摸鱼中 0:08 · 1 条')
   await (await world.band($)).press('give-up')
   expect((await $.command.run({ command: 'worknt', args: 'bill' } as never)).text).toContain('你刷了 5 条')
+})
+
+// ---- what the reviews found -------------------------------------------------------------
+
+test('P-1, the second look: a call that ends on a video site by a road it did not name gets no answer back', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await start($, world)
+  // The address names no video site; where it leads does.
+  world.app.slowTool = async () => {
+    const work = world.tabs.find(tab => tab.tabId === 'work')
+    if (work) work.origin = 'https://www.douyin.com'
+  }
+  const ran = (await $.tool.call({ tool: `${B}browser_batch`, actions: [{ name: 'navigate', input: { tabId: 'work', url: 'http://localhost:3000/r' } }, { name: 'get_page_text', input: { tabId: 'work' } }] } as never)) as { text?: string; deny?: string }
+  expect(ran.text).toContain('结果不提供')
+  expect(ran.text).not.toContain('ran ')
+  world.app.slowTool = null
+  // From then on that tab is a video-site tab like any other.
+  expect(((await $.tool.call({ tool: `${B}get_page_text`, tabId: 'work' })) as { deny?: string }).deny).toContain('/worknt off')
+})
+
+test('X-4, R-13: after a reset the tally starts over, and the next thing counted does not bring the old numbers back', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  world.app.videos = 6
+  world.app.watchMs = 60_000
+  await world.clock.advance(2500)
+  await $.command.run({ command: 'worknt', args: 'reset' } as never)
+  await world.clock.advance(1000)
+  expect((await $.command.run({ command: 'worknt', args: 'bill' } as never)).text).not.toContain('6')
+  await endTurn($, world)
+  await typedTurn($, world, 't2')
+  await endTurn($, world, 't2')
+  await world.clock.advance(12_000)
+  const bill = (await $.command.run({ command: 'worknt', args: 'bill' } as never)).text
+  expect(bill).toContain('0 clips')
+  expect(bill).not.toContain('6 clips')
+})
+
+test('S-3, I-8: when a tab of its own cannot be made, the person\'s tab is left alone; the retry is the same kind of break', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await start($, world)
+  world.app.failing = 'tabs_create'
+  await $.command.run({ command: 'worknt', args: 'go' } as never)
+  await world.clock.advance(1500)
+  expect(world.tabs).toEqual([{ tabId: 'work', origin: 'http://localhost:3000', isActive: true }])
+  const band = await world.band($)
+  expect(band.text).toBe('打不开 TikTok')
+  world.app.failing = null
+  await band.press('retry')
+  await world.clock.advance(2500)
+  // Nobody is working: it plays only because the first try was by command, and so is this one.
+  expect(world.app.want?.mode).toBe('play')
+})
+
+test('W-5, C-9: a press on the page after it has loaded anew counts, though its number has been seen before', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  world.app.health = 'elsewhere'
+  await world.clock.advance(2500)
+  world.app.acts = [{ n: 1, id: 'home' }]
+  await world.clock.advance(2500)
+  expect(world.browserCalls('navigate')).toHaveLength(2)
+  world.app.health = 'feed'
+  await world.clock.advance(2500)
+  await endTurn($, world)
+  await world.clock.advance(1500)
+  expect(world.app.want?.mode).toBe('card')
+  // The page that loaded numbers from one again.
+  world.app.acts = [{ n: 1, id: 'back' }]
+  await world.clock.advance(1500)
+  expect(world.report().claim).toBeNull()
+})
+
+test('R-3: a tab never shown, and one another session took over from, are closed at once; nothing is kept that nobody saw', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await start($, world)
+  await typedTurn($, world)
+  await world.clock.advance(10_000)
+  world.app.health = 'loading'
+  await (await world.band($)).press('accept')
+  await world.clock.advance(16_000)
+  await (await world.band($)).press('give-up')
+  expect(world.tabs.map(tab => tab.tabId)).toEqual(['work'])
+
+  // R-5: and a break that was up, taken by another session.
+  await endTurn($, world)
+  await typedTurn($, world, 't2')
+  world.app.health = 'feed'
+  await world.clock.advance(10_000)
+  await (await world.band($)).press('accept')
+  await world.clock.advance(1500)
+  expect(world.tabs).toHaveLength(2)
+  world.writeReport({ v: 1, id: 'sess-b', localId: 'local_b', cwd: '/proj/other', status: 'working', wait: null, since: world.clock.now(), lastMs: 0, seq: 0, beat: world.clock.now(), claim: world.clock.now() + 1, seen: true })
+  await world.clock.advance(2500)
+  expect(world.tabs.map(tab => tab.tabId)).toEqual(['work'])
+})
+
+test('R-8: a mod loaded in the middle of a turn knows the turn is running, and its end calls the person back', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  world.writeReport({ v: 1, id: 'sess-a', localId: 'local_a', cwd: '/proj/shop', status: 'working', wait: null, since: NOW - 30_000, lastMs: 0, seq: 3, beat: NOW - 2000, claim: null, seen: false })
+  await start($, world)
+  expect(world.report()).toMatchObject({ status: 'working', seq: 3 })
+  await endTurn($, world)
+  expect(world.report()).toMatchObject({ status: 'done', seq: 4 })
+})
+
+test('R-8: a report left over from long ago is not a turn still running', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  world.writeReport({ v: 1, id: 'sess-a', localId: 'local_a', cwd: '/proj/shop', status: 'working', wait: null, since: NOW - 3_600_000, lastMs: 0, seq: 3, beat: NOW - 3_600_000, claim: null, seen: false })
+  await start($, world)
+  expect(world.report()).toMatchObject({ status: 'idle', seq: 3 })
+})
+
+test('C-2: a question answered at once does not leave the session waiting', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await start($, world)
+  await typedTurn($, world)
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [] } as never)
+  await world.clock.settle()
+  await world.clock.advance(3000)
+  expect(world.report().status).toBe('working')
+})
+
+test('I-4, section 13: the first-use questions go with the turn that invited; "never mind" answers them', async ($, on) => {
+  const world = makeApp(on)
+  await start($, world)
+  await typedTurn($, world)
+  await world.clock.advance(10_000)
+  await (await world.band($)).press('accept')
+  expect((await world.band($)).buttons).toContain('lang-zh')
+  await endTurn($, world)
+  await world.clock.advance(3000)
+  expect((await world.band($)).buttons).not.toContain('lang-zh')
+
+  await typedTurn($, world, 't2')
+  await world.clock.advance(10_000)
+  await (await world.band($)).press('accept')
+  await (await world.band($)).press('give-up')
+  await world.clock.advance(3000)
+  expect((await world.band($)).text).toBe('')
+})
+
+test('W-3, C-10: "still there?" that nobody answers for ten minutes ends the break, however it was started', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await start($, world)
+  await $.command.run({ command: 'worknt', args: 'go' } as never)
+  await world.clock.advance(2500)
+  world.app.idleAsk = true
+  await world.clock.advance(9 * 60_000)
+  expect(world.report().claim).not.toBeNull()
+  await world.clock.advance(90_000)
+  expect(world.report().claim).toBeNull()
+})
+
+test('W-11, C-1: off the feed the person is still called back, by a note with the way back, and the line keeps its way out', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  world.app.health = 'elsewhere'
+  await world.clock.advance(2500)
+  expect(world.app.want?.note?.action?.id).toBe('home')
+  expect((await world.band($)).buttons).toEqual(['give-up'])
+  await endTurn($, world)
+  await world.clock.advance(1500)
+  expect(world.app.want).toMatchObject({ mode: 'plain', card: null, note: { text: 'Claude 跑完了', action: { id: 'back' } } })
+  world.app.acts = [{ n: 1, id: 'back' }]
+  await world.clock.advance(1500)
+  expect(world.report().claim).toBeNull()
+})
+
+test('C-10: a card being answered with "one more" is not a card nobody answers', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  await endTurn($, world)
+  await world.clock.advance(1500)
+  world.app.more = true
+  await world.clock.advance(12 * 60_000)
+  expect(world.report().claim).not.toBeNull()
+  world.app.more = false
+  await world.clock.advance(11 * 60_000)
+  expect(world.report().claim).toBeNull()
+})
+
+test('W-12: when the session is cleared the line is cleared with it; /worknt quiet answers the question on the line', async ($, on) => {
+  const world = makeApp(on, { settings: { ...READY, declines: 2 } })
+  await start($, world)
+  await typedTurn($, world)
+  await world.clock.advance(10_000)
+  await (await world.band($)).press('decline')
+  expect((await world.band($)).text).toBe('今天都别问了？')
+  await $.command.run({ command: 'worknt', args: 'quiet' } as never)
+  await world.clock.advance(1000)
+  expect((await world.band($)).text).toBe('')
+
+  await $.command.run({ command: 'worknt', args: 'quiet off' } as never)
+  await $.command.run({ command: 'worknt', args: 'go' } as never)
+  await world.clock.advance(2500)
+  expect((await world.band($)).text).toContain('摸鱼中')
+  await $.session.end({ reason: 'clear' } as never)
+  await world.clock.settle()
+  expect((await world.band($)).text).toBe('')
+})
+
+test('R-3: the kept tab is not forgotten when the pane cannot be asked at its ten minutes; it is closed when it can', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  await (await world.band($)).press('give-up')
+  expect(world.tabs).toHaveLength(2)
+  world.app.isListingRefused = true
+  await world.clock.advance(11 * 60_000)
+  expect(world.tabs).toHaveLength(2)
+  world.app.isListingRefused = false
+  await world.clock.advance(2 * 60_000)
+  expect(world.tabs).toHaveLength(1)
 })

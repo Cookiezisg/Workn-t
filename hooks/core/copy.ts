@@ -95,6 +95,10 @@ export type Copy = {
   paneNotChosen: string
   // Guard
   offLimits: string
+  /** W-9: the call named no tab and the tab in front is the person's video. */
+  useOwnTab: string
+  /** The call ran, and ended on a video site: its answer is not passed on. */
+  withheld: string
   guardFailed: string
   guardBusy: string
   // Command
@@ -122,14 +126,18 @@ export type Copy = {
   billEmpty: string
   // Reasons the mod stays asleep
   notDesktop: string
-  missingTools: (names: string) => string
 }
+
+/** Chinese sets a space between its own characters and a Latin word: 刷会儿 TikTok, but 刷会儿抖音. */
+const isLatin = (name: string): boolean => /^[\x00-\x7f]/.test(name)
+const after = (name: string): string => (isLatin(name) ? ` ${name}` : name)
+const before = (name: string): string => (isLatin(name) ? `${name} ` : name)
 
 export const COPY: Record<Lang, Copy> = {
   zh: {
     welcome: 'Workn’t 装好了。Claude 干活超过几秒时，这里会问你要不要刷会儿视频。',
     welcomeOk: '知道了',
-    invite: site => (site ? `刷会儿${site}？` : '刷会儿视频？'),
+    invite: site => (site ? `刷会儿${after(site)}？` : '刷会儿视频？'),
     yes: '好',
     no: '不用',
     quietAsk: '今天都别问了？',
@@ -138,16 +146,16 @@ export const COPY: Record<Lang, Copy> = {
     setupSound: '声音',
     soundOn: '有声',
     soundOff: '静音',
-    opening: site => `正在打开${site}`,
-    openingSlow: site => `${site}打开得有点慢`,
+    opening: site => `正在打开${after(site)}`,
+    openingSlow: site => `${before(site)}打开得有点慢`,
     waitMore: '再等等',
     giveUp: '算了',
-    openFailed: site => `打不开${site}`,
+    openFailed: site => `打不开${after(site)}`,
     retry: '重试',
     slack: (watchMs, videos) => `摸鱼中 ${clock(watchMs)} · ${videos} 条`,
     elsewhere: title => (title ? `视频开在「${title}」里` : '视频开在另一个会话里'),
     moveHere: '搬过来',
-    resume: site => `${site}还开着`,
+    resume: site => `${before(site)}还开着`,
     resumeYes: '接着刷',
     dormant: reason => `Workn’t 没在运行：${reason}`,
     doneOne: 'Claude 跑完了',
@@ -174,11 +182,11 @@ export const COPY: Record<Lang, Copy> = {
     stillThere: '还在吗？',
     stay: '在',
     loginNote: '登录后自动开始。可能需要短信或扫码验证。想让登录保留下来：面板右上角 ⋯ → Keep cookies → Shared。',
-    loginAgainNote: '又要登录了？把面板右上角 ⋯ 菜单里的 Keep cookies 改成 Shared，登录就能保留。',
+    loginAgainNote: '登录后自动开始。又要登录了？把面板右上角 ⋯ 菜单里的 Keep cookies 改成 Shared，登录就能保留。',
     verifyNote: '先完成验证，完成后自动开始。',
     elsewhereNote: '你离开了推荐流。',
     home: '回到推荐',
-    unknownNote: site => `${site}改版了，先这样看。`,
+    unknownNote: site => `${before(site)}改版了，先这样看。`,
     doneToast: title => `「${title}」跑完了`,
     failedToast: title => `「${title}」出错停下了`,
     lost: 'Workn’t 断开了。',
@@ -204,6 +212,10 @@ export const COPY: Record<Lang, Copy> = {
     paneNotChosen: '还没选',
     offLimits:
       '这个网站是用户自己刷视频用的，开着 Workn’t 时模型不能打开、读取或操作它。如果用户确实要你处理这个网站上的内容，请告诉用户先运行 /worknt off。',
+    useOwnTab:
+      '浏览器面板里现在显示的是用户自己在看的视频，这一步没有指定标签页，所以被拒绝了。请用 tabs_create 新开一个你自己的标签页，之后每一步都带上它的 tabId。用户的视频不需要关掉，也不需要让用户做任何事。',
+    withheld:
+      '这一步已经执行，但它涉及的标签页现在停在了用户看视频用的网站上，所以结果不提供。开着 Workn’t 时模型不能读取或操作这个网站；那个标签页请不要再使用，需要浏览器请另开一个标签页。',
     guardFailed: 'Workn’t 的守卫出错了，为保险起见拒绝了这次浏览器操作。运行 /worknt doctor 可以查看原因。',
     guardBusy: 'Workn’t 的守卫这一刻没法确认标签页的情况，所以先拒绝了这一步。请把这个浏览器操作单独再发一次，不要和别的浏览器操作同时发。',
     goSetup: '先在输入框上方选一下语言、看哪个、声音，选完就开始。',
@@ -211,7 +223,7 @@ export const COPY: Record<Lang, Copy> = {
     goAlready: '已经开着了。',
     on: '已开启。',
     off: '已关闭。关闭期间模型可以访问视频网站。',
-    siteSet: site => `改成${site}了。`,
+    siteSet: site => `改成${after(before(site)).replace(/ {2}/g, ' ')}了。`,
     soundSet: isOn => (isOn ? '有声。' : '静音。'),
     langSet: '已改成中文。',
     liveSet: isSkipped => (isSkipped ? '推荐流里的直播会自动划走。' : '直播照常显示。'),
@@ -231,7 +243,6 @@ export const COPY: Record<Lang, Copy> = {
     yesterday: '昨天',
     billEmpty: '还没有记录。',
     notDesktop: '只在 Claude 桌面版的 Code 里可用',
-    missingTools: names => `这个版本的 Claude 里找不到需要的功能（${names}），Workn’t 需要更新`,
   },
   en: {
     welcome: 'Workn’t is installed. When Claude has been working for a few seconds, this line will offer you a video break.',
@@ -281,7 +292,7 @@ export const COPY: Record<Lang, Copy> = {
     stillThere: 'Still there?',
     stay: 'Yes',
     loginNote: 'It starts by itself once you are signed in. You may be asked to verify. To stay signed in: the pane’s ⋯ menu → Keep cookies → Shared.',
-    loginAgainNote: 'Signing in again? Set Keep cookies to Shared in the pane’s ⋯ menu and it will stick.',
+    loginAgainNote: 'It starts by itself once you are signed in. Signing in again? Set Keep cookies to Shared in the pane’s ⋯ menu and it will stick.',
     verifyNote: 'Finish the verification. It starts by itself afterwards.',
     elsewhereNote: 'You left the feed.',
     home: 'Back to the feed',
@@ -311,6 +322,10 @@ export const COPY: Record<Lang, Copy> = {
     paneNotChosen: 'not chosen yet',
     offLimits:
       'This site is where the user watches videos. While Workn’t is on, the model may not open, read or control it. If the user really wants you to work on this site, tell them to run /worknt off first.',
+    useOwnTab:
+      'The browser pane is showing the video the user is watching, and this call named no tab, so it was refused. Open a tab of your own with tabs_create and pass its tabId on every call from then on. The user’s video does not need to be closed, and the user does not need to do anything.',
+    withheld:
+      'This call ran, but a tab it touched is now on the site the user watches videos on, so its result is not passed on. While Workn’t is on, the model may not read or control that site. Do not use that tab again; open another one if you need the browser.',
     guardFailed: 'Workn’t’s guard failed, so this browser call was refused to be safe. /worknt doctor shows why.',
     guardBusy: 'Workn’t’s guard could not check the tabs at this instant, so it refused this step. Send this browser call again on its own, not alongside other browser calls.',
     goSetup: 'Pick a language, a source and sound on the line above the prompt first. It starts after that.',
@@ -339,7 +354,6 @@ export const COPY: Record<Lang, Copy> = {
     yesterday: 'Yesterday',
     billEmpty: 'Nothing on record yet.',
     notDesktop: 'it only runs in the Claude desktop app’s Code tab',
-    missingTools: names => `this version of Claude lacks what it needs (${names}); Workn’t needs an update`,
   },
 }
 

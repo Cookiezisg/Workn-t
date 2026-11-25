@@ -391,10 +391,55 @@ test('C-9: swiping to the next clip during "one more" lets that clip play to its
   page.run(500)
   expect(page.hasHost()).toBe(false)
   video.currentTime = 12
-  page.run(500)
+  page.run(2000)
   video.currentTime = 0.3
   page.run(500)
   expect(page.hasHost()).toBe(true)
+})
+
+test('C-9: the slide\'s name and its video changing a moment apart is one swipe, not a clip that looped', () => {
+  const { page, video } = feed('douyin')
+  page.sync(want('card', { card: CARD }))
+  video.currentTime = 10
+  page.press('再看一条')
+  // The marker for the slide in view moves first; the old video is still the one on screen at ten seconds.
+  page.selectors['[data-e2e="feed-active-video"]'] = [{ classList: ['slide', 'video_2'] }]
+  page.run(500)
+  // Then the new clip is the one on screen, a fraction of a second in.
+  video.currentTime = 0.3
+  page.run(500)
+  expect(page.hasHost()).toBe(false)
+  video.currentTime = 8
+  page.run(2000)
+  video.currentTime = 0.2
+  page.run(500)
+  expect(page.hasHost()).toBe(true)
+})
+
+test('C-9: "one more" is one more: when the site moves on by itself, clip after clip, the card is back at the second move', () => {
+  const { page, video } = feed('tiktok')
+  page.sync(want('card', { card: CARD }))
+  page.press('再看一条')
+  video.currentSrc = 'https://v.example/clip-2.mp4'
+  page.run(3000)
+  expect(page.hasHost()).toBe(false)
+  video.currentSrc = 'https://v.example/clip-3.mp4'
+  page.run(500)
+  expect(page.hasHost()).toBe(true)
+  expect(video.paused).toBe(true)
+})
+
+test('C-9: swiping to a clip whose length is not known yet does not cut "one more" short as if it were a live stream', () => {
+  const { page, video } = feed('tiktok')
+  page.sync(want('card', { card: CARD }))
+  page.press('再看一条')
+  page.live(70_000)
+  video.currentSrc = 'https://v.example/clip-2.mp4'
+  video.duration = NaN
+  page.live(4000)
+  video.duration = 180
+  page.live(4000)
+  expect(page.hasHost()).toBe(false)
 })
 
 test('C-9: the same card sent again does not cut "one more" short; a different card does', () => {
@@ -420,11 +465,16 @@ test('C-11: a card takes the clip out of fullscreen first, so the card can be se
 test('C-12: Enter presses the first button, Space the second', () => {
   const first = feed().page
   first.sync(want('card', { card: CARD }))
+  // A key already on its way as the card comes up is not an answer to it.
+  first.key('keydown', 'Enter')
+  expect(first.ask().acts).toEqual([])
+  first.skip(700)
   first.key('keydown', 'Enter')
   expect(first.ask().acts.map(act => act.id)).toEqual(['back'])
 
   const { page, video } = feed()
   page.sync(want('card', { card: CARD }))
+  page.skip(700)
   page.key('keydown', ' ')
   expect(page.ask().acts.map(act => act.id)).toEqual(['more'])
   expect(video.paused).toBe(false)
@@ -548,11 +598,30 @@ test('S-6: with sound off a clip starts muted, until the person changes the volu
   const { page, video } = feed()
   page.sync(want('play'), 0, { isMuted: true })
   expect(video.muted).toBe(true)
-  page.run(1000)
+  page.run(2000)
+  page.touch()
   video.muted = false
-  page.media('volumechange')
+  page.media('volumechange', video)
   page.run(1000)
   expect(video.muted).toBe(false)
+})
+
+test('S-6: the site setting a new slide\'s volume is not the person changing it: with sound off the next clip is muted too, at once', () => {
+  const { page, video } = feed()
+  page.cfg.isMuted = true
+  page.sync(want('play'))
+  page.run(2000)
+  // A swipe: another clip is now the one on screen, and the site's player gives it its saved volume and starts it.
+  const next = makeVideo('https://v.example/clip-2.mp4')
+  video.getBoundingClientRect = () => ({ left: 0, top: -800, right: 400, bottom: 0 })
+  page.videos.push(next)
+  page.touch()
+  page.media('volumechange', next)
+  next.play()
+  page.media('play', next)
+  expect(next.muted).toBe(true)
+  page.run(2000)
+  expect(next.muted).toBe(true)
 })
 
 test('C-5: "paused" pauses once and then leaves the clip to the person', () => {
@@ -748,18 +817,26 @@ test('T-1, S-6: the sound setting changed elsewhere reaches a clip already playi
   expect(video.muted).toBe(true)
 })
 
-test('T-1: nothing of ours is rebuilt between a press and its release, so the click lands', () => {
+test('T-1: nothing of ours is rebuilt between a press and its release, so the click lands; a press never released does not freeze it', () => {
   const { page } = feed()
   page.cfg.menu = menuOf('on', 'show')
   page.sync(want('play'))
+  page.run(4500)
   page.move()
+  page.run(2000)
   const before = page.hostEl()
   page.hostDown()
   // The button's time is up while the finger is down: it stays until the finger is lifted.
-  page.run(6000)
+  page.run(1000)
   expect(page.hostEl()).toBe(before)
   page.up()
   page.run(500)
+  expect(page.hasHost()).toBe(false)
+
+  // A press whose release never arrives (a right click does that) is forgotten after a moment.
+  page.move()
+  page.hostDown()
+  page.run(5000)
   expect(page.hasHost()).toBe(false)
 })
 
@@ -1056,4 +1133,89 @@ test('W-3: "still there?" does not outlive the playing it asked about', () => {
   page.sync(want('paused'))
   expect(page.drawn()).not.toContain('还在吗？')
   expect(page.key('keydown', 'ArrowDown').wasStopped).toBe(false)
+})
+
+test('W-4: a pause belongs to the clip it was made on; after a swipe the next clip is not held by it', () => {
+  const { page, video } = feed()
+  page.sync(want('play'))
+  page.skip(1000)
+  video.pause()
+  page.media('pause', video)
+  page.run(1000)
+  expect(video.paused).toBe(true)
+
+  const next = makeVideo('https://v.example/clip-2.mp4')
+  next.paused = false
+  video.getBoundingClientRect = () => ({ left: 0, top: -800, right: 400, bottom: 0 })
+  page.videos.push(next)
+  page.run(500)
+  // Out of sight and back: the clip now in view resumes, because nobody paused that one.
+  page.sync(want('play', { hold: true }))
+  expect(next.paused).toBe(true)
+  page.sync(want('play'))
+  page.run(500)
+  expect(next.paused).toBe(false)
+})
+
+test('W-3: coming back after a long time out of sight does not get "still there?" at once', () => {
+  const { page, video } = feed()
+  page.sync(want('play'))
+  page.sync(want('play', { hold: true }))
+  page.live(6 * 60_000)
+  page.sync(want('play'))
+  page.live(4000)
+  expect(page.drawn()).not.toContain('还在吗？')
+  expect(video.paused).toBe(false)
+})
+
+test('C-5, W-2: a clip the person starts again after an interruption still stops when the page goes out of sight', () => {
+  const { page, video } = feed()
+  page.sync(want('play'))
+  page.sync(want('paused'))
+  page.skip(1000)
+  video.play()
+  page.media('play', video)
+  page.run(1000)
+  expect(video.paused).toBe(false)
+  page.sync(want('paused', { hold: true }))
+  page.run(500)
+  expect(video.paused).toBe(true)
+})
+
+test('no clip in view (a slide of pictures): a neighbour below the fold is neither played nor counted', () => {
+  const { page, video } = feed('tiktok')
+  video.getBoundingClientRect = () => ({ left: 0, top: 800, right: 400, bottom: 1600 })
+  page.sync(want('play'))
+  page.run(5000)
+  expect(video.paused).toBe(true)
+  expect(page.ask().watchMs).toBe(0)
+})
+
+test('R-9: a page that let go by itself and is then found again carries on the same break, counts and all', () => {
+  const { page } = feed()
+  page.sync(want('play'))
+  page.run(3000)
+  const before = page.sync(want('card', { card: CARD }))
+  page.run(31_000)
+  expect(page.ask().lost).toBe(true)
+  const after = page.sync(want('card', { card: CARD }))
+  expect(after.load).toBe(before.load)
+  expect(after.videos).toBe(before.videos)
+})
+
+test('a page that loads anew numbers its presses above the ones the mod has already handled', () => {
+  const { page } = feed()
+  page.sync(want('card', { card: CARD }), 7)
+  page.skip(700)
+  page.press('回去看看')
+  expect(page.ask().acts).toEqual([{ n: 8, id: 'back' }])
+})
+
+test('the site sweeping our element off the page does not leave a lock with no card', () => {
+  const { page } = feed()
+  page.sync(want('card', { card: CARD }))
+  page.doc.documentElement.removeChild(page.hostEl())
+  expect(page.hasHost()).toBe(false)
+  page.run(500)
+  expect(page.drawn()).toContain(CARD.title)
 })

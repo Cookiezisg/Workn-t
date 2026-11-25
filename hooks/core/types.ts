@@ -140,7 +140,7 @@ export type Card = {
   againMany: string
 }
 
-export type Note = { id: string; text: string; action: { id: 'home'; label: string } | null }
+export type Note = { id: string; text: string; action: { id: 'home' | 'back'; label: string } | null }
 export type Toast = { id: string; text: string }
 
 export type PageWant = {

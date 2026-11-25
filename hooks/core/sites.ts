@@ -46,7 +46,8 @@ const ALL_HOSTS: readonly string[] = Object.values(SITES).flatMap(site => site.h
 export function hostOfUrl(url: unknown): string | null {
   if (typeof url !== 'string') return null
   const match = /^[a-z][a-z0-9+.-]*:\/\/([^/?#:@]+)(?::\d+)?/i.exec(url.trim())
-  return match ? (match[1] ?? '').toLowerCase() : null
+  // A host may be written with a closing dot; it is the same host.
+  return match ? (match[1] ?? '').toLowerCase().replace(/\.+$/, '') : null
 }
 
 /** True for any address on a video site, subdomains included. */

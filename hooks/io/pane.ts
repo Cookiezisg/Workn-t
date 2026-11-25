@@ -69,12 +69,14 @@ export type Pane = { isOpen: boolean; isShown: boolean; tabs: TabInfo[] }
 /** Reads a tab listing, as `tabs_context` words it, whoever asked for it. */
 export function toPane(text: string): Pane | null {
   const json = firstJson(text) as { browserOpen?: unknown; tabs?: unknown } | null
-  if (json === null || typeof json !== 'object') return null
-  const tabs = Array.isArray(json.tabs)
-    ? (json.tabs as { tabId?: unknown; origin?: unknown; isActive?: unknown }[])
-        .filter(tab => typeof tab?.tabId === 'string')
-        .map(tab => ({ tabId: String(tab.tabId), origin: typeof tab.origin === 'string' ? tab.origin : '', isActive: tab.isActive === true }))
-    : []
+  if (json === null || typeof json !== 'object' || Array.isArray(json)) return null
+  // A listing in a shape this does not know is no listing: better none than one that reads as "no tabs" (P-4).
+  if (!Array.isArray(json.tabs) || typeof json.browserOpen !== 'boolean') return null
+  const tabs: TabInfo[] = []
+  for (const tab of json.tabs as { tabId?: unknown; origin?: unknown; isActive?: unknown }[]) {
+    if (typeof tab?.tabId !== 'string') return null
+    tabs.push({ tabId: tab.tabId, origin: typeof tab.origin === 'string' ? tab.origin : '', isActive: tab.isActive === true })
+  }
   return { isOpen: json.browserOpen === true, isShown: /currently displayed/.test(text), tabs }
 }
 
@@ -132,7 +134,7 @@ export async function titles($: $): Promise<Record<string, string>> {
  * new tab first; where the pane is closed there is none to be had, and the
  * first navigation opens the pane, hidden, with that tab in it.
  */
-export async function openTab($: $, url: string): Promise<string | null> {
+export async function openTab($: $, url: string, hasTabs: boolean): Promise<string | null> {
   const made = await call($, BROWSER, 'tabs_create')
   const created = made.isOk ? (firstJson(made.text) as { tabId?: unknown } | null) : null
   if (typeof created?.tabId === 'string') {
@@ -140,6 +142,9 @@ export async function openTab($: $, url: string): Promise<string | null> {
     await call($, BROWSER, 'tabs_close', { tabId: created.tabId })
     return null
   }
+  // S-3: a navigation that names no tab lands on whichever tab is in front. With tabs open that is the person's
+  // own tab, so it is only done where there is none to land on.
+  if (hasTabs) return null
   const opened = await call($, BROWSER, 'navigate', { url })
   const json = opened.isOk ? (firstJson(opened.text) as { tabId?: unknown } | null) : null
   if (typeof json?.tabId === 'string') return json.tabId
@@ -197,4 +202,10 @@ export async function giveFocus($: $, tabId: string): Promise<boolean> {
 /** Presses one key in the tab, as a keyboard would: the sites move their feed on nothing less. */
 export async function pressKey($: $, tabId: string, key: string): Promise<boolean> {
   return (await call($, BROWSER, 'computer', { action: 'key', text: key, tabId, action_summary: 'Moves the feed to the next clip' })).isOk
+}
+
+/** Why the direct road's tab listing failed, in the tool's own words; empty when it answered. For the record only. */
+export async function paneWhy($: $): Promise<string> {
+  const got = await call($, BROWSER, 'tabs_context')
+  return got.isOk && toPane(got.text) !== null ? '' : got.text.slice(0, 160)
 }

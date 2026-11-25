@@ -183,10 +183,21 @@ const toDay = (raw: unknown): Day => {
   return { agentMs: num(r.agentMs), watchMs: num(r.watchMs), videos: num(r.videos) }
 }
 
-/** Adds to this session's own count for the day. */
-export async function addToDay($: $, p: Paths, sessionId: string, now: number, delta: Partial<Day>): Promise<void> {
+/**
+ * Adds to this session's own count for the day. A count last written before `since` (a reset) is not built on:
+ * the file starts over, or the next thing counted would bring back everything the reset put away (X-4).
+ */
+export async function addToDay($: $, p: Paths, sessionId: string, now: number, delta: Partial<Day>, since = 0): Promise<void> {
   const path = `${p.tally}/${dayOf(now)}/${sessionId}.json`
-  const held = toDay(await readJson($, path))
+  let isStale = false
+  if (since > 0) {
+    try {
+      isStale = (((await $.fs.stat(path)) as { mtimeMs?: number }).mtimeMs ?? 0) <= since
+    } catch {
+      isStale = false
+    }
+  }
+  const held = isStale ? toDay(null) : toDay(await readJson($, path))
   await writeJson($, path, {
     agentMs: held.agentMs + (delta.agentMs ?? 0),
     watchMs: held.watchMs + (delta.watchMs ?? 0),
@@ -198,7 +209,7 @@ export async function addToDay($: $, p: Paths, sessionId: string, now: number, d
 export async function readDay($: $, p: Paths, day: string, since: number): Promise<Day> {
   const total: Day = { agentMs: 0, watchMs: 0, videos: 0 }
   for (const entry of await list($, `${p.tally}/${day}`)) {
-    if (!entry.name.endsWith('.json') || entry.mtimeMs < since) continue
+    if (!entry.name.endsWith('.json') || (since > 0 && entry.mtimeMs <= since)) continue
     const one = toDay(await readJson($, `${p.tally}/${day}/${entry.name}`))
     total.agentMs += one.agentMs
     total.watchMs += one.watchMs

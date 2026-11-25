@@ -2,7 +2,8 @@ import { atom, read } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import { COPY } from './core/copy'
-import { BROWSER_PREFIX, judge, needsTabs, scrubResult } from './core/guard'
+import { BROWSER_PREFIX, judge, landedOnSite, needsTabs, scrubResult } from './core/guard'
+import type { TabInfo } from './core/guard'
 import { SITES } from './core/sites'
 import type { Band } from '../types'
 import { EMPTY_PANEL, PANE_ID, apply, boot, command, copyOf, enqueue, guardView, newCtx, press, rememberTabs, showDoctor, shutdown } from './engine'
@@ -34,6 +35,8 @@ export const register: Register = on => {
     await $.command.register({
       name: 'worknt',
       description: 'Workn’t: videos while Claude works · 设置、账单、自查',
+      // So that `/worknt go`, typed while Claude is working, starts now and not when the turn is over.
+      immediate: true,
       argumentHint: 'go | on | off | douyin | tiktok | sound | live | lang | delay | idle | quiet | here | bill | doctor | reset',
     })
 
@@ -66,12 +69,24 @@ export const register: Register = on => {
     return next(e)
   })
 
+  /** The model's tool calls now running, so that a request for the person's approval can be matched to the call it is for. */
+  const inFlight: { id: string; name: string; args: string }[] = []
+  const argsOf = (input: unknown): string => {
+    try {
+      return JSON.stringify(input) ?? ''
+    } catch {
+      return ''
+    }
+  }
+
   on('tool.call', async ($, e, next) => {
     const name = String(e.tool)
     const input = e as unknown as Record<string, unknown>
     const id = String(input.tool_use_id ?? '')
     // A mod's own calls carry this mark; only the model's are judged.
     const isModel = !id.startsWith('toolu_plugin_')
+    const { tool: _tool, tool_use_id: _id, agentId: _agent, requestMeta: _meta, ...args } = input
+    if (isModel) inFlight.push({ id, name, args: argsOf(args) })
 
     // C-2: a question or a plan to confirm blocks the turn on the person until the tool returns.
     const isWait = isModel && (name === 'AskUserQuestion' || name === 'ExitPlanMode')
@@ -80,41 +95,67 @@ export const register: Register = on => {
       void enqueue(c, async () => apply($, c, { t: 'wait-start', now: await $.clock.now(), kind, key: id }))
     }
 
+    const done = (): void => {
+      const at = inFlight.findIndex(call => call.id === id)
+      if (at >= 0) inFlight.splice(at, 1)
+      // Whatever was waiting on this call is over. Sent every time: the wait's start may still be in the queue ahead of
+      // this, and an end for something never waited on changes nothing.
+      const keys = [id, `perm:${id}`]
+      if (!inFlight.some(call => call.name === name)) keys.push(`perm:${name}`)
+      for (const key of keys) void enqueue(c, async () => apply($, c, { t: 'wait-end', now: await $.clock.now(), key }))
+    }
+
     const isBrowser = isModel && name.startsWith(BROWSER_PREFIX)
-    let isGuarded = false
+    let before: readonly TabInfo[] | null = null
     if (isBrowser) {
       await c.booted
-      const { tool: _tool, tool_use_id: _id, agentId: _agent, requestMeta: _meta, ...args } = input
-      const view = await guardView($, c, needsTabs(name, args))
-      isGuarded = view.isOn
+      // A call that can touch no tab is judged without listing them: the model's own listing is such a call, and
+      // while it is in flight the engine refuses the mod the same one.
+      const wantsTabs = needsTabs(name, args) || name === `${BROWSER_PREFIX}preview_start`
+      const view = await guardView($, c, wantsTabs)
       if (view.isOn) {
-        if (view.tabs === null) return { deny: copyOf(c).guardBusy } // P-4
-        if (judge(name, args, view.tabs) === 'deny') return { deny: copyOf(c).offLimits } // P-1
+        const copy = copyOf(c)
+        if (view.tabs === null) {
+          // P-4: the tabs could not be listed, so a call that may touch one cannot be judged.
+          done()
+          return { deny: judge(name, args, []) === 'site' ? copy.offLimits : copy.guardBusy }
+        } else {
+          const verdict = judge(name, args, view.tabs)
+          if (verdict !== 'pass') {
+            done()
+            return { deny: verdict === 'front' ? copy.useOwnTab : copy.offLimits } // P-1, W-9
+          }
+        }
+        before = view.tabs ?? []
       }
     }
 
-    const ran = await next(e)
-
-    for (const key of [id, `perm:${id}`, `perm:${name}`]) {
-      if (c.memory.waits.some(wait => wait.key === key)) {
-        void enqueue(c, async () => apply($, c, { t: 'wait-end', now: await $.clock.now(), key }))
-      }
+    let ran: Awaited<ReturnType<typeof next>>
+    try {
+      ran = await next(e)
+    } finally {
+      done()
     }
 
-    if (isGuarded) {
-      // P-3: the answer lists every tab's title and address. Blank the video site's.
-      const got = ran as unknown as { deny?: unknown; result?: unknown; text?: unknown; context?: readonly string[] }
+    if (before !== null) {
+      const copy = copyOf(c)
+      const got = ran as unknown as { deny?: unknown; result?: unknown; text?: unknown; context?: unknown }
+      if (got.deny !== undefined) return ran
       if (name === `${BROWSER_PREFIX}tabs_context` && typeof got.text === 'string') {
         // The model's own listing is as good as ours: keep it for the guard's next verdict.
         const listed = toPane(got.text)
-        if (listed !== null) rememberTabs(c, Date.now(), listed.tabs)
-      }
-      if (got.deny === undefined && got.result !== undefined) {
-        const cleaned = scrubResult(got.result)
-        if (cleaned.changed) {
-          return (got.context ? { result: cleaned.result, context: got.context } : { result: cleaned.result }) as never
+        if (listed !== null) rememberTabs(c, await $.clock.now(), listed.tabs)
+      } else if (needsTabs(name, args) || name === `${BROWSER_PREFIX}preview_start`) {
+        // P-1, the second look: the answer is the model's only if, as things stand now, the call touched no video site.
+        const after = await guardView($, c, true)
+        if (after.isOn && (after.tabs === null || landedOnSite(name, args, before, after.tabs))) {
+          const why = after.tabs === null ? copy.guardBusy : copy.withheld
+          return { result: [{ type: 'text', text: why }], text: why } as never
         }
       }
+      // P-3: the answer lists every tab's title and address. Blank the video site's, wherever they sit in it.
+      const cleaned = scrubResult({ result: got.result, text: got.text, context: got.context })
+      if (cleaned.changed) return { ...(ran as object), ...(cleaned.result as object) } as never
     }
 
     return ran
@@ -124,8 +165,14 @@ export const register: Register = on => {
   )
 
   on('classic.PermissionRequest', ($, e, next) => {
-    const asked = e as { tool_use_id?: unknown; tool_name?: unknown }
-    const key = `perm:${String(asked.tool_use_id ?? asked.tool_name ?? '')}`
+    // C-2. The request names the tool and its arguments but not the call, so it is matched to the call now running
+    // with that tool and those arguments. With no match it is kept under the tool's name, and ends when the last
+    // running call of that name does.
+    const asked = e as { tool_name?: unknown; tool_input?: unknown }
+    const tool = String(asked.tool_name ?? '')
+    const args = argsOf(asked.tool_input)
+    const call = inFlight.find(one => one.name === tool && one.args === args) ?? [...inFlight].reverse().find(one => one.name === tool)
+    const key = call === undefined ? `perm:${tool}` : `perm:${call.id}`
     void enqueue(c, async () => apply($, c, { t: 'wait-start', now: await $.clock.now(), kind: 'approval', key }))
 
     return next(e)
@@ -178,6 +225,8 @@ export const register: Register = on => {
           text = copy.setupSound
           buttons = [['sound-on', copy.soundOn], ['sound-off', copy.soundOff]]
         }
+        // A question nobody has to answer: there is a way to say never mind.
+        buttons.push(['give-up', copy.giveUp])
         break
       case 'opening':
         text = view.isSlow ? copy.openingSlow(named) : copy.opening(named)
@@ -225,6 +274,8 @@ export const register: Register = on => {
 
   // T-1: every setting, changed with a click. Each button runs the same command the person could type.
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
+    // Being drawn is being open, whichever load of the mod opened it: keep it current from here on.
+    c.isPanelOpen = true
     const panel = await read($, panelAtom)
     const copy = COPY[panel.lang]
     const { Box, Button, Text } = $.ui.resolve(e)

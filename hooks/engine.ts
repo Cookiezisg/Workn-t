@@ -7,7 +7,7 @@ import type { Copy } from './core/copy'
 import { TOAST_MS, decideGuest, decideHost } from './core/decide'
 import { PAGE_VERSION, isPageStats, statsScript, syncScript } from './core/page'
 import type { PageConfig, PageMenu } from './core/page'
-import { alive, hostOf, isActive, newMemory, newReport, reduce } from './core/report'
+import { BEAT_LIMIT_MS, alive, hostOf, isActive, newMemory, newReport, reduce } from './core/report'
 import type { ReportEvent, ReportMemory } from './core/report'
 import type { TabInfo } from './core/guard'
 import { SITES, isSiteUrl } from './core/sites'
@@ -15,7 +15,7 @@ import { DEFAULT_SETTINGS } from './core/types'
 import type { BandView, Day, EndWhy, Lang, Linger, PageStats, PageWant, Report, Settings, SiteId, Slack } from './core/types'
 import { addToDay, clearLogs, dayOf, flushLog, loadSettings, newLog, note, paths, readDay, readJson, readReports, saveSettings, writeReport, isReport } from './io/files'
 import type { Log, Paths, ReportCache, SettingsCache } from './io/files'
-import { paneForGuard, closePane, closeTab, exec, giveFocus, layout as readLayout, navigate, openTab, pane as readPane, pressKey, selectTab, showPane, titles as readTitles } from './io/pane'
+import { paneForGuard, paneWhy, closePane, closeTab, exec, giveFocus, layout as readLayout, navigate, openTab, pane as readPane, pressKey, selectTab, showPane, titles as readTitles } from './io/pane'
 
 /**
  * What one session's copy of the mod does between events: keeps its own
@@ -37,7 +37,7 @@ const bandAtom = atom(
   { view: { kind: 'none' }, lang: 'en', site: null } as Band,
   { shape: 'band-3' },
 )
-const slackAtom = atom({ plugin: 'worknt', key: 'slack' } as const, null as Slack | null, { shape: 'slack-4' })
+const slackAtom = atom({ plugin: 'worknt', key: 'slack' } as const, null as Slack | null, { shape: 'slack-5' })
 const lingerAtom = atom({ plugin: 'worknt', key: 'linger' } as const, null as Linger | null, { shape: 'linger-1' })
 
 const NO_DAY = { agentMs: 0, watchMs: 0, videos: 0 }
@@ -109,6 +109,12 @@ export type Ctx = {
   wasShown: boolean
   /** The break now opening is on the tab kept from the last one, wherever the person has since taken it. */
   isKeptTab: boolean
+  /** Whether the break last started, or tried, was asked for by command: a retry is the same kind. */
+  wasManual: boolean
+  /** The reset this session has already acted on (X-4); -1 before the first look. */
+  seenResetAt: number
+  /** What the page last said it was, to note the change (S-5, D-2). */
+  lastHealth: string
 }
 
 export const newCtx = (): Ctx => ({
@@ -149,6 +155,9 @@ export const newCtx = (): Ctx => ({
   tabsSeen: null,
   wasShown: true,
   isKeptTab: false,
+  wasManual: false,
+  seenResetAt: -1,
+  lastHealth: '',
 })
 
 // ---- small things --------------------------------------------------------------
@@ -180,9 +189,10 @@ export function rememberTabs(c: Ctx, now: number, tabs: readonly TabInfo[]): voi
  * `tabs` is null: the guard refuses and asks for the call again on its own.
  */
 export async function guardView($: $, c: Ctx, needsTabs: boolean): Promise<{ isOn: boolean; tabs: readonly TabInfo[] | null }> {
-  if (!isAwake(c) || c.p === null) return { isOn: false, tabs: null }
-  c.settings = await loadSettings($, c.p, c.settings)
-  if (!c.settings.value.isEnabled) return { isOn: false, tabs: null }
+  // A browser call means there is a browser, whatever start-up concluded: asleep, the guard still stands (P-4, P-9).
+  if (c.p === null) c.p = await paths($)
+  if (c.p !== null) c.settings = await loadSettings($, c.p, c.settings)
+  if (!settingsOf(c).isEnabled) return { isOn: false, tabs: null }
   if (!needsTabs) return { isOn: true, tabs: [] }
   const now = await $.clock.now()
   const got = await paneForGuard($)
@@ -194,9 +204,6 @@ export async function guardView($: $, c: Ctx, needsTabs: boolean): Promise<{ isO
   note(c.log, now, `guard could not list the tabs: ${got.why}`)
   return { isOn: true, tabs: null }
 }
-
-/** The guard is on wherever the mod is awake and switched on (P-6). */
-export const isGuarding = (c: Ctx): boolean => isAwake(c) && settingsOf(c).isEnabled
 
 const fail = (c: Ctx, now: number, what: string, err: unknown): void => {
   const line = `${what}: ${String(err).slice(0, 200)}`
@@ -254,7 +261,7 @@ async function settleTally($: $, c: Ctx, now: number, isForced: boolean): Promis
   const owed = c.owed
   c.owed = { agentMs: 0, watchMs: 0, videos: 0 }
   c.owedAt = now
-  await addToDay($, c.p, c.report.id, now, owed)
+  await addToDay($, c.p, c.report.id, now, owed, settingsOf(c).resetAt)
 }
 
 // ---- the page -------------------------------------------------------------------
@@ -285,7 +292,9 @@ const pageConfig = (c: Ctx, site: SiteId, theme: unknown): PageConfig => {
 /** What the page was last told, as one text: a change in the `want` or in a setting the page goes by is a reason to tell it again. */
 const sentKey = (c: Ctx, want: PageWant): string => {
   const settings = settingsOf(c)
-  return JSON.stringify([want, settings.sound, settings.live, settings.idleMin, langOf(c)])
+  // The card's lines carry a running count; they are read once, when the card first shows, so a change in them alone is no reason (R-10).
+  const told = want.card === null ? want : { ...want, card: { ...want.card, lines: [] } }
+  return JSON.stringify([told, settings.sound, settings.live, settings.idleMin, langOf(c)])
 }
 
 async function readTheme($: $): Promise<unknown> {
@@ -397,10 +406,16 @@ async function setLinger($: $, c: Ctx, value: Linger | null, now: number): Promi
 /** R-3: the kept tab's time is up. Closes it only if it is still ours to close. */
 async function closeLinger($: $, c: Ctx): Promise<void> {
   const held = c.linger
-  await setLinger($, c, null, 0)
-  if (held === null || c.slack !== null) return
+  if (held === null) return
+  if (c.slack !== null) return setLinger($, c, null, 0)
   const now = await readPane($)
-  const tab = now?.tabs.find(candidate => candidate.tabId === held.tabId)
+  if (now === null) {
+    // The pane cannot be asked right now. Forgetting the tab here would leave it open for good: look again in a minute.
+    const at = await $.clock.now()
+    return setLinger($, c, { ...held, until: at + 60_000 }, at)
+  }
+  await setLinger($, c, null, 0)
+  const tab = now.tabs.find(candidate => candidate.tabId === held.tabId)
   if (tab !== undefined && isSiteUrl(tab.origin)) await closeTab($, held.tabId)
 }
 
@@ -410,6 +425,7 @@ async function startSlack($: $, c: Ctx, isManual: boolean): Promise<void> {
   const site = settings.site
   if (c.slack !== null || site === null || !isAwake(c)) return
   const now = await $.clock.now()
+  c.wasManual = isManual
   // Say so before doing it: opening the tab takes seconds, and until the line changes the person keeps pressing.
   c.setup = null
   await setBand($, c, { kind: 'opening', isSlow: false })
@@ -423,15 +439,13 @@ async function startSlack($: $, c: Ctx, isManual: boolean): Promise<void> {
 
   let tabId: string | null = null
   const kept = c.linger
-  if (kept !== null && kept.site === site && before !== null && before.tabs.some(tab => tab.tabId === kept.tabId && isSiteUrl(tab.origin))) {
-    tabId = kept.tabId
-  }
-  if (tabId === null && kept !== null && before !== null && before.tabs.some(tab => tab.tabId === kept.tabId && isSiteUrl(tab.origin))) {
-    await closeTab($, kept.tabId)
-  }
+  // Where the pane cannot be listed, the kept tab is taken on trust: if it is gone, the page not answering will say so.
+  const isKeptThere = kept !== null && (before === null || before.tabs.some(tab => tab.tabId === kept.tabId && isSiteUrl(tab.origin)))
+  if (kept !== null && isKeptThere && kept.site === site) tabId = kept.tabId
+  else if (kept !== null && isKeptThere) await closeTab($, kept.tabId)
   await setLinger($, c, null, now)
   c.isKeptTab = tabId !== null
-  if (tabId === null) tabId = await openTab($, SITES[site].feedUrl)
+  if (tabId === null) tabId = await openTab($, SITES[site].feedUrl, before === null || before.tabs.length > 0)
   if (tabId === null) {
     c.hasFailed = true
     fail(c, now, 'start', 'could not open a tab')
@@ -457,6 +471,7 @@ async function startSlack($: $, c: Ctx, isManual: boolean): Promise<void> {
     cardSince: 0,
     cardId: null,
     freedCard: null,
+    idleAskSince: 0,
     quietSince: 0,
     toasted: {},
     toast: null,
@@ -490,23 +505,23 @@ export async function endSlack($: $, c: Ctx, why: EndWhy): Promise<void> {
 
   const pane = await readPane($)
   let isTabAlive = pane?.tabs.some(tab => tab.tabId === slack.tabId) === true
-  if ((isTabAlive || pane === null) && why !== 'left' && why !== 'closed') {
-    // R-4: whatever happens next, the page is left an ordinary, paused page.
+  if ((isTabAlive || pane === null) && why !== 'closed') {
+    // R-4, W-6: whatever happens next, nothing of ours is left running on the page, wherever it has gone.
     const rested = await exec($, slack.tabId, syncScript(pageConfig(c, slack.site, undefined), { want: REST, ack: slack.ackedActs }))
     if (pane === null) isTabAlive = rested !== null
   }
-  if (isTabAlive && why !== 'left' && why !== 'unusable') {
-    await setLinger($, c, { tabId: slack.tabId, site: slack.site, until: now + LINGER_MS }, now)
-  }
   // S-2: only undo what we did. If our tab is no longer in front, the person has moved on already.
-  if (isTabAlive && pane !== null && pane.tabs.find(tab => tab.isActive)?.tabId === slack.tabId && why !== 'left') {
+  const wasInFront = pane !== null && pane.tabs.find(tab => tab.isActive)?.tabId === slack.tabId
+  // R-3: the tab is kept for a while only where the person had it in front of them and may want it back.
+  // One never shown, one that cannot be driven, and one another session has taken over from (R-5) are closed now.
+  const isKept = isTabAlive && why !== 'left' && slack.stage === 'live' && why !== 'unusable' && why !== 'moved'
+  if (isTabAlive && pane !== null && wasInFront && why !== 'left') {
     const previous = slack.scene.activeTab
-    if (previous !== null && previous !== slack.tabId && pane.tabs.some(tab => tab.tabId === previous)) {
-      await selectTab($, previous)
-    } else if (!slack.scene.isPaneOpen) {
-      await closePane($)
-    }
+    if (previous !== null && previous !== slack.tabId && pane.tabs.some(tab => tab.tabId === previous)) await selectTab($, previous)
+    if (!slack.scene.isPaneOpen) await closePane($)
   }
+  if (isKept) await setLinger($, c, { tabId: slack.tabId, site: slack.site, until: now + LINGER_MS }, now)
+  else if (isTabAlive && why !== 'left') await closeTab($, slack.tabId)
 
   if (why === 'error' || why === 'unusable') c.hasFailed = true
   c.report = { ...c.report, claim: null, seen: false }
@@ -551,6 +566,8 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
   if (!settingsOf(c).isEnabled) return endSlack($, c, 'off')
   const holder = hostOf(reports)
   if (holder !== null && holder.id !== c.report.id) return endSlack($, c, 'moved')
+  // X-4: a reset, typed in whichever session, ends the break wherever it is.
+  if (settingsOf(c).resetAt > slack.startedAt) return endSlack($, c, 'cancel')
 
   const pane = await readPane($)
   if (pane !== null) {
@@ -565,6 +582,11 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
   let isTabAlive = pane === null ? true : pane.tabs.some(tab => tab.tabId === slack.tabId)
   if (isTabAlive) {
     const asked = await askPage($, slack)
+    if (asked === 'missing' && pane !== null) {
+      // W-6: a tab that has left the site is no longer ours. Nothing is put into it.
+      const origin = pane.tabs.find(tab => tab.tabId === slack.tabId)?.origin ?? ''
+      if (origin !== '' && !isSiteUrl(origin)) return endSlack($, c, 'left')
+    }
     page = asked === 'missing' ? await syncPage($, c, slack, slack.stage === 'opening' || c.sentWant === null ? HOLD : c.sentWant) : asked
   }
   if (page !== null && page.err && page.err !== c.lastPage?.err) fail(c, now, 'page', page.err)
@@ -615,13 +637,23 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
     // A page still at rest is showing the last break's numbers, which were counted then.
     // The first look of a break only notes where the page's counters stand: whatever they hold was not watched in this break.
     if (slack.counted.load === 0) slack.counted = { load: page.load, videos: page.videos, watchMs: page.watchMs }
-    else if (page.load !== slack.counted.load) slack.counted = { load: page.load, videos: 0, watchMs: 0 }
+    else if (page.load !== slack.counted.load) {
+      slack.counted = { load: page.load, videos: 0, watchMs: 0 }
+      // A page that loaded anew numbers its button presses from one again.
+      slack.ackedActs = 0
+    }
     const more = { videos: Math.max(0, page.videos - slack.counted.videos), watchMs: Math.max(0, page.watchMs - slack.counted.watchMs) }
     slack.counted = { load: page.load, videos: page.videos, watchMs: page.watchMs }
     slack.videos += more.videos
     slack.watchMs += more.watchMs
     c.owed = { ...c.owed, videos: c.owed.videos + more.videos, watchMs: c.owed.watchMs + more.watchMs }
   }
+
+  if (page !== null && page.health !== c.lastHealth) {
+    note(c.log, now, `the page is "${page.health}"${c.lastHealth ? ` (was "${c.lastHealth}")` : ''}`)
+    c.lastHealth = page.health
+  }
+  if (page !== null) slack.idleAskSince = page.idleAsk ? slack.idleAskSince || now : 0
 
   if (page !== null) {
     // L-3: the sign-in is over. Go to the feed without being asked.
@@ -667,6 +699,8 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
     slack.ackedActs = act.n
     if (act.id === 'home') await navigate($, slack.tabId, SITES[slack.site].feedUrl) // W-5
     else if (act.id === 'skip') {
+      // The page asked a moment ago; by now the feed may have moved on by itself. The key is for a live stream still in view.
+      if (!page.live) continue
       const isPressed = await pressKey($, slack.tabId, 'ArrowDown')
       note(c.log, now, `a live stream came up (told by its ${act.arg ?? '?'}): pressed down (${isPressed ? 'ok' : 'refused'})`)
     }
@@ -688,6 +722,8 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
     slack.cardId = wantedCard
     slack.cardSince = wantedCard === null ? 0 : now
   }
+  // C-10: a card being answered with "one more" is not a card nobody answers.
+  if (page.more && slack.cardSince > 0) slack.cardSince = now
   slack.quietSince = decision.isQuiet ? slack.quietSince || now : 0
   if (decision.toasted !== null && want.toast !== null) {
     slack.toasted = { ...slack.toasted, [decision.toasted.id]: decision.toasted.seq }
@@ -746,6 +782,12 @@ export async function tick($: $, c: Ctx): Promise<void> {
   c.settings = await loadSettings($, c.p, c.settings)
   // T-1: a setting changed in another session shows in this one's pane as well.
   if (c.settings !== held && c.isPanelOpen) await refreshPanel($, c)
+  const resetAt = c.settings.value.resetAt
+  if (resetAt !== c.seenResetAt) {
+    // X-4: a reset somewhere. What this session still owed the tally from before it is dropped with the rest.
+    if (c.seenResetAt !== -1 && resetAt > c.seenResetAt) c.owed = { agentMs: 0, watchMs: 0, videos: 0 }
+    c.seenResetAt = resetAt
+  }
   const reports = await allReports($, c, now)
   if (c.slack !== null) await hostTick($, c, c.slack, now, reports)
   if (c.slack === null) await guestTick($, c, now, reports)
@@ -790,6 +832,13 @@ async function wake($: $, c: Ctx, now: number): Promise<void> {
   const fresh = newReport(id, cwd, now)
   const previous = id !== '' ? await readJson($, `${c.p.sessions}/${id}.json`) : null
   c.report = isReport(previous) ? { ...fresh, seq: previous.seq, lastMs: previous.lastMs, localId: previous.localId } : fresh
+  if (isReport(previous) && isActive(previous.status) && now - previous.beat <= BEAT_LIMIT_MS) {
+    // R-8: the mod was reloaded in the middle of a turn. The turn is still running; so is what this session says of it.
+    const running = previous.status === 'self' ? 'self' : 'working'
+    c.report = { ...c.report, status: running, since: previous.since }
+    c.memory = { ...c.memory, running }
+  }
+  c.seenResetAt = c.settings.value.resetAt
 
   // The browser pane and the window exist only in the desktop app, so asking them is also the test for being there.
   // (The session's list of attached surfaces is not: it is empty whenever the session is not on screen.)
@@ -797,8 +846,7 @@ async function wake($: $, c: Ctx, now: number): Promise<void> {
   const layout = await readLayout($)
   if (pane === null) {
     // Say why, so a wrong guess about the cause can be told from the record (D-4).
-    const why = await paneForGuard($)
-    note(c.log, now, `the pane did not answer at start-up: ${why.why}`)
+    note(c.log, now, `the pane did not answer at start-up: ${await paneWhy($)}`)
   }
   if (pane === null && layout === null) {
     c.dormant = copy.notDesktop
@@ -844,7 +892,7 @@ export async function boot($: $, c: Ctx): Promise<void> {
     fail(c, now, 'boot', err)
   } finally {
     // D-2: whatever happened, it is on record.
-    if (c.p !== null) await flushLog($, c.p, c.report.id || 'unknown', c.log, now, true)
+    if (c.p !== null) await flushLog($, c.p, c.report.id || 'unknown', c.log, now, true, settingsOf(c).resetAt)
   }
   // The app's own servers may still be coming up when a session starts: look again a few times before settling for asleep.
   if (!isAwake(c) && c.bootTries < 6) {
@@ -871,6 +919,10 @@ export async function apply($: $, c: Ctx, event: ReportEvent): Promise<void> {
     c.hasLeft = false
     c.canResume = false
   }
+  if (event.t === 'turn-end' && c.setup !== null && !c.isManualSetup) {
+    // I-4: the questions were part of an invitation, and the invitation goes with the turn.
+    c.setup = null
+  }
   if (event.t === 'turn-end' && settingsOf(c).isEnabled) {
     c.owed = { ...c.owed, agentMs: c.owed.agentMs + Math.max(0, event.durationMs) }
   }
@@ -888,7 +940,16 @@ export async function shutdown($: $, c: Ctx): Promise<void> {
   const now = await $.clock.now()
   c.report = reduce(c.report, c.memory, { t: 'session-end', now }).report
   await publish($, c, now)
-  if (c.p !== null) await flushLog($, c.p, c.report.id, c.log, now, true)
+  await settleTally($, c, now, true)
+  // W-12: nothing is going on any more, and the line says nothing.
+  c.setup = null
+  c.isAskingQuiet = false
+  c.hasFailed = false
+  await setBand($, c, { kind: 'none' })
+  if (c.p !== null) {
+    c.settings = await loadSettings($, c.p, c.settings)
+    await flushLog($, c.p, c.report.id, c.log, now, true, settingsOf(c).resetAt)
+  }
   c.loop?.cancel()
   c.loop = null
 }
@@ -936,8 +997,9 @@ export async function press($: $, c: Ctx, what: Press): Promise<void> {
     case 'accept':
     case 'retry':
       c.hasFailed = false
-      // Answering the invitation is not asking by command, unless it is the retry of one that was.
+      // Answering the invitation is not asking by command; a retry is whatever the try was.
       if (what === 'accept' && c.setup === null) c.isManualSetup = false
+      if (what === 'retry') c.isManualSetup = c.wasManual
       await accept($, c)
       break
     case 'go':
@@ -987,6 +1049,8 @@ export async function press($: $, c: Ctx, what: Press): Promise<void> {
       c.hasFailed = false
       c.setup = null
       c.isManualSetup = false
+      // "Never mind" is an answer for the rest of this turn, whatever it was said to.
+      c.hasLeft = true
       await endSlack($, c, 'cancel')
       break
   }
@@ -996,10 +1060,13 @@ export async function press($: $, c: Ctx, what: Press): Promise<void> {
 // ---- the command ------------------------------------------------------------------
 
 /** Where the page is, without what is on it: the host and the shape of the path, every number and id blanked (P-7). */
+const ROUTE_WORDS = new Set(['root', 'live', 'user', 'video', 'note', 'search', 'foryou', 'following', 'friends', 'explore', 'discover', 'jingxuan', 'hot', 'channel', 'login', 'passport'])
 const routeOf = (url: string): string => {
   const m = /^[a-z]+:\/\/([^/?#]+)([^?#]*)/i.exec(url)
   if (!m) return '?'
-  return `${m[1]}${(m[2] ?? '').replace(/[^/]{12,}|\d+/g, '*')}`
+  // Only the words that name a kind of page are kept. A handle, a search, an id: each is somebody's business.
+  const path = (m[2] ?? '').split('/').map(part => (part === '' || ROUTE_WORDS.has(part.toLowerCase()) ? part : '*')).join('/')
+  return `${m[1]}${path}`
 }
 
 async function doctor($: $, c: Ctx): Promise<string> {
@@ -1081,11 +1148,16 @@ export async function command($: $, c: Ctx, args: string): Promise<string> {
       // The page that is up belongs to the other site: let it go rather than restyle it.
       if (c.slack !== null && c.slack.site !== first) await endSlack($, c, 'cancel')
       if (c.linger !== null && c.linger.site !== first) await closeLinger($, c)
+      if (c.setup !== null) await accept($, c)
     })
     return done(copy.siteSet(SITES[first].label[langOf(c)]))
   }
   if (first === 'sound' && (second === 'on' || second === 'off')) {
-    await enqueue(c, () => changeSettings($, c, { sound: second }))
+    await enqueue(c, async () => {
+      await changeSettings($, c, { sound: second })
+      // The first-use questions take an answer given here as well as one pressed on the line.
+      if (c.setup !== null) await accept($, c)
+    })
     return done(copy.soundSet(second === 'on'))
   }
   if (first === 'live' && (second === 'show' || second === 'skip')) {
@@ -1093,7 +1165,10 @@ export async function command($: $, c: Ctx, args: string): Promise<string> {
     return done(copy.liveSet(second === 'skip'))
   }
   if (first === 'lang' && (second === 'zh' || second === 'en')) {
-    await enqueue(c, () => changeSettings($, c, { lang: second }))
+    await enqueue(c, async () => {
+      await changeSettings($, c, { lang: second })
+      if (c.setup !== null) await accept($, c)
+    })
     return done(COPY[second].langSet)
   }
   if ((first === 'delay' || first === 'idle') && second !== undefined && /^\d+$/.test(second)) {
@@ -1104,7 +1179,11 @@ export async function command($: $, c: Ctx, args: string): Promise<string> {
   if (first === 'quiet') {
     const isOff = second === 'off'
     const now = await $.clock.now()
-    await enqueue(c, () => changeSettings($, c, { quietDay: isOff ? null : dayOf(now), declines: 0 }))
+    await enqueue(c, async () => {
+      await changeSettings($, c, { quietDay: isOff ? null : dayOf(now), declines: 0 })
+      // The question on the line has been answered here.
+      c.isAskingQuiet = false
+    })
     return done(isOff ? copy.quietOff : copy.quietOn)
   }
   if (first === 'here' && (second === 'on' || second === 'off')) {
@@ -1125,10 +1204,12 @@ export async function command($: $, c: Ctx, args: string): Promise<string> {
     return rows.length === 0 ? copy.billEmpty : rows.join('\n')
   }
   if (first === 'reset') {
-    const now = await $.clock.now()
     await enqueue(c, async () => {
       await endSlack($, c, 'cancel')
       await closeLinger($, c)
+      // The moment of the reset comes after the break has been wound up and counted, so that count falls before it.
+      const now = await $.clock.now()
+      c.seenResetAt = now
       c.owed = { agentMs: 0, watchMs: 0, videos: 0 }
       if (c.p !== null) await saveSettings($, c.p, { ...DEFAULT_SETTINGS, resetAt: now })
       if (c.p !== null) c.settings = await loadSettings($, c.p, null)

@@ -21,7 +21,7 @@ import type { PageStats, PageWant, SiteId } from './types'
  * is therefore decided here, not by a round trip to the mod.
  */
 
-export const PAGE_VERSION = 27
+export const PAGE_VERSION = 28
 
 export type PageConfig = {
   v: number
@@ -91,12 +91,18 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       more: null,
       moreCount: 0,
       freed: null,
+      pausedEl: null,
+      lastV: null,
+      viewSince: born,
+      wasInSight: true,
+      lockedAt: 0,
       idleAsk: false,
       userPaused: false,
       oursUntil: 0,
       pauseOnce: false,
       acts: [],
-      actN: 0,
+      // A page that loads anew must not reuse numbers the mod has already seen: they would be taken for old presses.
+      actN: cmd && typeof cmd.ack === 'number' && cmd.ack > 0 ? cmd.ack : 0,
       lost: false,
       locked: false,
       cssOn: false,
@@ -107,7 +113,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       toastUntil: 0,
       silenced: [],
       volTouched: false,
-      pressing: false,
+      pressing: 0,
       err: null,
       steps: 0,
       why: '',
@@ -163,9 +169,19 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         var active = W.one('[data-e2e="feed-active-video"] video')
         if (active) return active
       }
-      for (var j = 0; j < list.length; j++) if (!list[j].paused) return list[j]
-      for (var k = 0; k < list.length; k++) if (list[k].readyState > 0) return list[k]
-      return list.length > 0 ? list[0] : null
+      // Nothing on screen (a slide of pictures, one not built yet): then there is no clip in view, and
+      // a neighbour below the fold is not played, paused or counted in its place.
+      return null
+    }
+
+    /** The clip in view, noting when it changes: a slide just swiped to is not yet the person's doing. */
+    W.viewed = function (): any {
+      var v = W.cur()
+      if (v !== W.lastV) {
+        W.lastV = v
+        W.viewSince = now()
+      }
+      return v
     }
 
     /** Names a clip well enough to count it once. */
@@ -184,8 +200,9 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       return Math.round((v.duration || 0) * 10) + 'x' + (v.videoWidth || 0) + 'x' + (v.videoHeight || 0)
     }
 
+    /** A stream with no end. A clip whose length is not known yet is not one. */
     W.isLive = function (v: any): boolean {
-      return !!v && !(v.duration > 0 && v.duration < 1e9)
+      return !!v && (v.duration === Infinity || v.duration > 1e9)
     }
 
     /** Takes up most of the window right now. */
@@ -206,7 +223,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         var marks = W.all('[data-e2e="feed-live"]')
         for (var i = 0; i < marks.length; i++) if (W.fills(marks[i])) return 'mark'
       }
-      return v && v.readyState > 0 && (v.duration === Infinity || v.duration > 1e9) && v.currentTime > 3 ? 'length' : ''
+      return v && v.readyState > 0 && W.isLive(v) && v.currentTime > 3 ? 'length' : ''
     }
 
     /** A setting as it will be: the choice just made on the menu, until the mod's own word arrives. */
@@ -226,10 +243,13 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
     W.applySound = function (): void {
       W.volTouched = false
       if (W.isMuted()) return
-      var v = W.cur()
-      if (v && v.muted && W.silenced.indexOf(v) === -1) {
-        W.ours()
-        v.muted = false
+      // Every slide still on the page, not only the one in view: the ones swiped past were muted too.
+      var list = W.all('video')
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].muted && W.silenced.indexOf(list[i]) === -1) {
+          W.ours()
+          list[i].muted = false
+        }
       }
     }
 
@@ -251,11 +271,12 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       }
       if (doc.readyState === 'loading') return 'loading'
 
-      var challenge =
+      var marks =
         site === 'douyin'
-          ? W.one('#captcha_container') || W.one('.captcha-verify-container') || W.one('iframe#nocaptcha-container')
-          : W.one('#captcha-verify-container-main-page') || W.one('.captcha_verify_container') || W.one('#captcha_container')
-      if (W.shown(challenge)) return 'verify'
+          ? ['#captcha_container', '.captcha-verify-container', 'iframe#nocaptcha-container']
+          : ['#captcha-verify-container-main-page', '.captcha_verify_container', '#captcha_container']
+      // The sites keep some of these around empty; one of them being there must not hide another that is showing.
+      for (var c = 0; c < marks.length; c++) if (W.shown(W.one(marks[c]))) return 'verify'
 
       var isSignedOut = false
       if (site === 'tiktok') {
@@ -427,7 +448,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       }
       var v = W.cur()
       W.moreCount += 1
-      W.more = { key: W.key(v), lastT: v ? v.currentTime || 0 : 0, at: now(), isLive: W.isLive(v) }
+      W.more = { key: W.key(v), el: v, lastT: v ? v.currentTime || 0 : 0, at: now(), changes: 0, changedAt: 0 }
       W.userPaused = false
       W.act('more')
     }
@@ -457,9 +478,10 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         cue ? 'p' : '',
         dark ? 'd' : 'l',
       ].join('|')
-      if (sig === W.drawn) return
+      // Drawn already, and still on the page: the site may have swept our element away with its own.
+      if (sig === W.drawn && (!W.host || W.host.parentNode)) return
       // Never rebuild under a finger: a button replaced between press and release gets no click.
-      if (W.pressing && W.host) return
+      if (W.pressing && t - W.pressing < 1500 && W.host) return
       W.drawn = sig
       W.clear()
       if (!locked && !note && !toast && !gear && !cue) return
@@ -477,7 +499,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         (locked ? 'auto;background:rgba(0,0,0,.6);justify-content:flex-end;' : 'none;background:transparent;justify-content:space-between;')
       var root = host.attachShadow ? host.attachShadow({ mode: 'closed' }) : host
       host.addEventListener('pointerdown', function () {
-        W.pressing = true
+        W.pressing = now()
       })
       doc.documentElement.appendChild(host)
       W.host = host
@@ -679,15 +701,28 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       // Principle 3 and W-5: off the feed, the site is left exactly as it is.
       W.setCss(isFeed && (mode === 'hold' || mode === 'play' || mode === 'card' || mode === 'paused'))
 
-      var v = W.cur()
+      var v = W.viewed()
+      // W-4: a pause is the person's word about that clip. Once another clip is in view it has nothing to say.
+      if (W.userPaused && W.pausedEl && W.pausedEl !== v) {
+        W.userPaused = false
+        W.pausedEl = null
+      }
 
       if (W.more && v) {
         var key = W.key(v)
-        if (key !== W.more.key) {
+        if (key !== W.more.key || v !== W.more.el) {
+          // C-9: one swipe to the next clip is allowed, and that clip is then the "one more". The slide's name and its
+          // video do not change in the same instant, so both changing within a moment is one swipe, not two. A second
+          // change is the site moving on by itself, clip after clip: that is not what was asked for.
+          if (t - W.more.changedAt > 1500) W.more.changes += 1
+          W.more.changedAt = t
           W.more.key = key
+          W.more.el = v
           W.more.lastT = v.currentTime || 0
-          W.more.isLive = W.isLive(v)
-        } else if (v.ended || (v.currentTime || 0) + 0.75 < W.more.lastT || t - W.more.at > (W.more.isLive ? 60000 : 300000)) {
+          if (W.more.changes > 1) W.more = null
+        } else if (t - W.more.at > (W.isLive(v) ? 60000 : 300000)) {
+          W.more = null
+        } else if (t - W.more.changedAt > 1500 && (v.ended || (v.currentTime || 0) + 0.75 < W.more.lastT)) {
           W.more = null
         } else {
           W.more.lastT = v.currentTime || 0
@@ -697,6 +732,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
 
       var isFreed = mode === 'card' && W.isFreed()
       var isRunning = isFeed && (mode === 'play' || (mode === 'card' && (!!W.more || isFreed)))
+      if (!W.want.hold && W.framesOk && !W.wasInSight) W.lastInput = t
       if (isRunning && mode === 'play' && !W.idleAsk && v && !v.paused && t - W.lastInput > W.cfg.idleMs) {
         W.idleAsk = true // W-3
       }
@@ -704,7 +740,11 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
 
       var showCard = isFeed && mode === 'card' && !W.more && !isFreed && !!W.want.card
       var locked = showCard || W.idleAsk
-      var shouldPlay = isRunning && !W.idleAsk && !W.want.hold && W.framesOk
+      var isInSight = !W.want.hold && W.framesOk
+      // W-3: time out of sight is not time without input. Coming back starts the wait again.
+      if (isInSight && !W.wasInSight) W.lastInput = t
+      W.wasInSight = isInSight
+      var shouldPlay = isRunning && !W.idleAsk && isInSight
 
       if (locked) {
         if (!W.locked && doc.fullscreenElement && doc.exitFullscreen) {
@@ -727,8 +767,12 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
             v.muted = true
           }
           if (v && v.paused && !W.userPaused) W.play(v)
-        } else if (isRunning) {
-          W.pauseAll() // W-2: not on screen
+        } else if (isRunning || (mode === 'paused' && !isInSight)) {
+          // W-2: not on screen. That holds for a clip the person started themselves after we paused it (C-5), too.
+          W.pauseAll()
+        } else if (mode === 'paused' && isFeed && W.isMuted() && !W.volTouched && v && !v.paused && !v.muted) {
+          W.ours()
+          v.muted = true // S-6
         }
       }
       W.pauseOnce = false
@@ -751,6 +795,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
 
       if (locked !== W.locked) {
         W.locked = locked
+        if (locked) W.lockedAt = t
         W.listen(locked)
       }
 
@@ -796,7 +841,8 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
     W.block = function (e: any): void {
       if (!W.locked) return
       if (W.host && e.composedPath && e.composedPath().indexOf(W.host) !== -1) return
-      if (e.type === 'keydown' && !e.repeat) {
+      // C-12. A key already on its way when the card came up (the end of a comment being typed) is not an answer to it.
+      if (e.type === 'keydown' && !e.repeat && now() - W.lockedAt > 600) {
         if (e.key === 'Enter') {
           W.primary()
           W.step()
@@ -821,7 +867,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
     W.touched = function (e: any): void {
       var t = now()
       W.lastInput = t
-      if (e && (e.type === 'pointerup' || e.type === 'pointercancel')) W.pressing = false
+      if (e && (e.type === 'pointerup' || e.type === 'pointercancel')) W.pressing = 0
       if (e && e.type === 'mousemove') {
         var wasOut = t - W.lastMove >= 2500
         W.lastMove = t
@@ -830,10 +876,21 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
     }
 
     W.media = function (e: any): void {
-      var isOurs = now() <= W.oursUntil
+      var t = now()
+      var isOurs = t <= W.oursUntil
+      var inView = W.viewed()
+      var isInView = !e.target || e.target === inView
       if (e.type === 'volumechange') {
-        if (!isOurs) W.volTouched = true
+        // S-6: only the person changing the volume lifts the mute, and the person is told from the site by three things:
+        // it is the clip in view, it has been in view a moment (the site sets a new slide's volume as it arrives), and
+        // they touched the page just now.
+        if (!isOurs && isInView && t - W.viewSince > 1500 && t - W.lastInput < 1500) W.volTouched = true
         return
+      }
+      // S-6: a clip starting aloud while sound is off is muted on the spot, not at the next half second.
+      if (e.type === 'play' && e.target && W.want.mode !== 'rest' && W.want.mode !== 'plain' && W.isMuted() && !W.volTouched && !e.target.muted) {
+        W.ours()
+        e.target.muted = true
       }
       if (W.locked || W.want.mode === 'hold') {
         if (e.type === 'play') W.pauseAll()
@@ -842,10 +899,15 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       if (isOurs) return
       // W-4: a pause of the person's own is theirs to undo. Only the clip in view speaks for the person:
       // the site starts and stops the slides around it all the time.
-      var isInView = !e.target || e.target === W.cur()
-      if (e.type === 'pause' && isInView && (W.want.mode === 'play' || W.more)) W.userPaused = true
+      if (e.type === 'pause' && isInView && (W.want.mode === 'play' || W.more || W.isFreed())) {
+        W.userPaused = true
+        W.pausedEl = e.target || null
+      }
       if (e.type === 'play') {
-        if (isInView) W.userPaused = false
+        if (isInView) {
+          W.userPaused = false
+          W.pausedEl = null
+        }
         W.blocked = false
       }
     }
@@ -878,7 +940,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       for (var j = 0; j < MEDIA.length; j++) doc.removeEventListener(MEDIA[j], W.media, true)
       win.clearInterval(W.timer)
       if (win.cancelAnimationFrame) win.cancelAnimationFrame(W.raf)
-      W.pressing = false
+      W.pressing = 0
       if (W.locked) {
         W.locked = false
         W.listen(false)
@@ -937,8 +999,10 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
   if (cmd && cmd.want) {
     var prev = W.want
     var next = cmd.want
+    // R-9: a page that let go by itself is the same break when the mod comes back, not a new one.
+    var wasLost = W.lost
     W.lost = false
-    if (prev.mode === 'rest' && next.mode !== 'rest') {
+    if (prev.mode === 'rest' && next.mode !== 'rest' && !wasLost) {
       // A new break on a page kept from the last one: nothing of that one is carried over, least of all its counts.
       W.load = now()
       W.videos = 0
@@ -967,6 +1031,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
     if ((next.mode === 'paused' || next.mode === 'rest') && prev.mode !== next.mode) W.pauseOnce = true
     W.want = next
     if (next.mode === 'rest') {
+      W.pressing = 0
       W.step()
       W.disarm()
       W.acts = []

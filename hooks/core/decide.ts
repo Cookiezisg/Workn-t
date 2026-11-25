@@ -71,6 +71,8 @@ export function decideHost(w: HostWorld): HostDecision {
   if (page.health === 'left') return { kind: 'end', why: 'left' }
   if (page.acts.some(act => act.n > slack.ackedActs && act.id === 'back')) return { kind: 'end', why: 'back' }
   if (slack.cardSince > 0 && now - slack.cardSince >= CARD_TIMEOUT_MS) return { kind: 'end', why: 'timeout' }
+  // W-3, C-10: the page's own "still there?" is a card too. Nobody answering it for as long means nobody is there.
+  if (slack.idleAskSince > 0 && now - slack.idleAskSince >= CARD_TIMEOUT_MS) return { kind: 'end', why: 'timeout' }
   if (now - slack.seenAt >= AWAY_MS) return { kind: 'end', why: 'away' }
   // A break the person asked for by command stays for as long as they do: W-3 and the away rule still watch for an empty chair.
   if (!slack.isManual && slack.freedCard === null && slack.cardSince === 0 && slack.quietSince > 0 && now - slack.quietSince >= QUIET_MS) return { kind: 'end', why: 'idle' }
@@ -149,11 +151,16 @@ export function decideHost(w: HostWorld): HostDecision {
       note = { id: 'unknown', text: copy.unknownNote(w.siteLabel), action: null }
     }
     const mode = page.health === 'loading' ? 'hold' : 'plain'
+    // L-4: no card over a sign-in or a verification, and nothing of ours on them but the small note.
+    // Anywhere else off the feed the person is still called back, by a note that says what the card would have
+    // said and carries its first button: the site's page stays as it is (principle 3).
+    const isSignIn = page.health === 'login' || page.health === 'verify'
+    if (card !== null && mode === 'plain' && !isSignIn) note = { id: `call:${card.id}`, text: card.title, action: { id: 'back', label: card.primary.label } }
     return {
       kind: 'page',
       want: { mode, hold, card: null, note: mode === 'plain' ? note : null, toast: null },
-      // L-4: no card over a sign-in, but the line still says what is true.
-      band: card !== null ? { kind: 'card', text: card.title } : { kind: 'none' },
+      // W-11: the line says the break is on, with the way back to work, wherever the page is.
+      band: card !== null ? { kind: 'card', text: card.title } : { kind: 'slack', watchMs: slack.watchMs, videos: slack.videos },
       isQuiet,
       toasted: null,
     }

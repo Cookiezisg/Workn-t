@@ -34,6 +34,8 @@ export type Slack = {
   cardId: string | null
   /** C-14: the card the person told to leave them alone. It is not shown again; a different card is. */
   freedCard: string | null
+  /** W-3: since when the page's own "still there?" has been up unanswered; 0 when it is not. */
+  idleAskSince: number
   /** When nobody has been working since; 0 while somebody is. */
   quietSince: number
   /** Completions already shown as a toast, by session id. */

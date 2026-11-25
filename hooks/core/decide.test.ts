@@ -19,7 +19,7 @@ const page = (patch: Partial<PageStats> = {}): PageStats => ({
 
 const slack = (patch: Partial<Slack> = {}): Slack => ({
   startedAt: NOW - 60_000, site: 'douyin', tabId: 'feed', scene: { isPaneOpen: false, activeTab: null }, isManual: false, stage: 'live',
-  sawLogin: false, silentSince: 0, openedAt: NOW - 60_000, patienceMs: 0, seenAt: NOW, cardSince: 0, cardId: null, freedCard: null,
+  sawLogin: false, silentSince: 0, openedAt: NOW - 60_000, patienceMs: 0, seenAt: NOW, cardSince: 0, cardId: null, freedCard: null, idleAskSince: 0,
   quietSince: 0, toasted: {}, toast: null, counted: { load: 1, videos: 0, watchMs: 0 }, ackedActs: 0, watchMs: 125_000, videos: 5, ...patch,
 })
 
