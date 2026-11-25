@@ -34,6 +34,8 @@ export type Slack = {
   quietSince: number
   /** Completions already shown as a toast, by session id. */
   toasted: Record<string, number>
+  /** C-3: the toast now up, kept until its time is over so one tick does not take it down again. */
+  toast: { id: string; text: string; until: number } | null
   /** Page counters at the last look, to add only what is new. */
   counted: { load: number; videos: number; watchMs: number }
   /** How many of the page's acts have been handled. */
@@ -56,6 +58,9 @@ export type BandView =
   | { kind: 'card'; text: string }
   | { kind: 'elsewhere'; title: string | null; canMove: boolean }
 
+/** R-3: the tab kept, paused, for a while after a break ends, and when it is due to be closed. */
+export type Linger = { tabId: string; site: SiteId; until: number }
+
 /** What the line above the prompt reads: the view, and what it needs to word it. */
 export type Band = { view: BandView; lang: Lang; site: SiteId | null }
 
@@ -65,6 +70,8 @@ declare module 'claude-code' {
       band: Shaped<Band>
       /** The host session's record of the video page, kept so a reloaded mod carries on (R-8). */
       slack: Shaped<Slack | null>
+      /** Kept here for the same reason: a reloaded mod must not forget a tab it owes a closing. */
+      linger: Shaped<Linger | null>
     }
   }
 }

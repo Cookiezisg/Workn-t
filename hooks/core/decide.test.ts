@@ -20,7 +20,7 @@ const page = (patch: Partial<PageStats> = {}): PageStats => ({
 const slack = (patch: Partial<Slack> = {}): Slack => ({
   startedAt: NOW - 60_000, site: 'douyin', tabId: 'feed', scene: { isPaneOpen: false, activeTab: null }, stage: 'live',
   sawLogin: false, silentSince: 0, openedAt: NOW - 60_000, patienceMs: 0, seenAt: NOW, cardSince: 0, cardId: null,
-  quietSince: 0, toasted: {}, counted: { load: 1, videos: 0, watchMs: 0 }, ackedActs: 0, watchMs: 125_000, videos: 5, ...patch,
+  quietSince: 0, toasted: {}, toast: null, counted: { load: 1, videos: 0, watchMs: 0 }, ackedActs: 0, watchMs: 125_000, videos: 5, ...patch,
 })
 
 const host = (patch: Partial<HostWorld> = {}): HostWorld => ({
@@ -110,8 +110,13 @@ test('C-3: one session finishing while another still works is a toast, shown onc
   expect(first.want.mode).toBe('play')
   expect(first.want.toast?.text).toBe('「写测试」跑完了')
   expect(first.toasted).toEqual({ id: 'b', seq: 2 })
-  const again = wantOf(host({ reports, titles: { local_b: '写测试' }, slack: slack({ toasted: { b: 2 } }) }))
-  expect(again.want.toast).toBeNull()
+  // It stays up for its five seconds, however many ticks pass, and then it is gone for good.
+  const up = slack({ toasted: { b: 2 }, toast: { id: 't:b:2', text: '「写测试」跑完了', until: NOW + 3000 } })
+  const during = wantOf(host({ reports, slack: up }))
+  expect(during.want.toast?.text).toBe('「写测试」跑完了')
+  expect(during.toasted).toBeNull()
+  const after = wantOf(host({ reports, now: NOW + 3000, slack: up }))
+  expect(after.want.toast).toBeNull()
 })
 
 test('C-4: a turn that failed is said to have failed', () => {

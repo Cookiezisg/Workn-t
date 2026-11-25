@@ -9,6 +9,8 @@ import type { BandView, Card, EndWhy, Note, PageStats, PageWant, Report, Setting
  * one by one and lets a reloaded mod pick up exactly where it was (R-8).
  */
 
+/** C-3: how long a toast stays up. */
+export const TOAST_MS = 5000
 /** C-10: a card nobody answers is taken as "back". */
 export const CARD_TIMEOUT_MS = 10 * 60_000
 /** Section 8: the page has not been on screen for this long. */
@@ -161,7 +163,9 @@ export function decideHost(w: HostWorld): HostDecision {
   // C-3: somebody finished while others still work.
   let toast: Toast | null = null
   let toasted: { id: string; seq: number } | null = null
-  if (working.length > 0) {
+  if (slack.toast !== null && now < slack.toast.until) {
+    toast = { id: slack.toast.id, text: slack.toast.text }
+  } else if (working.length > 0) {
     const fresh = finished.find(report => report.seq > (slack.toasted[report.id] ?? 0))
     if (fresh !== undefined) {
       const name = fresh.id === w.me ? copy.thisSession : titleOf(fresh, w.titles)

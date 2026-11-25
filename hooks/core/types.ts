@@ -7,9 +7,9 @@
  * they are passed on from here so the rest of the code has one place to import from.
  */
 
-import type { BandView, Lang, Scene, SiteId, Slack } from '../../types'
+import type { BandView, Lang, Linger, Scene, SiteId, Slack } from '../../types'
 
-export type { BandView, Lang, Scene, SiteId, Slack }
+export type { BandView, Lang, Linger, Scene, SiteId, Slack }
 
 
 /** What one session is doing, as that session itself reports it. */

@@ -4,7 +4,7 @@ import type { EngineInterface } from 'claude-code'
 import type { Band } from '../types'
 import { COPY, guessLang } from './core/copy'
 import type { Copy } from './core/copy'
-import { decideGuest, decideHost } from './core/decide'
+import { TOAST_MS, decideGuest, decideHost } from './core/decide'
 import { PAGE_VERSION, isPageStats, statsScript, syncScript } from './core/page'
 import type { PageConfig } from './core/page'
 import { alive, isActive, newMemory, newReport, reduce } from './core/report'
@@ -12,7 +12,7 @@ import type { ReportEvent, ReportMemory } from './core/report'
 import type { TabInfo } from './core/guard'
 import { SITES, isSiteUrl } from './core/sites'
 import { DEFAULT_SETTINGS } from './core/types'
-import type { BandView, Day, EndWhy, Lang, PageStats, PageWant, Report, Settings, SiteId, Slack } from './core/types'
+import type { BandView, Day, EndWhy, Lang, Linger, PageStats, PageWant, Report, Settings, SiteId, Slack } from './core/types'
 import { addToDay, dayOf, flushLog, loadSettings, newLog, note, paths, readDay, readJson, readReports, saveSettings, writeReport, isReport } from './io/files'
 import type { Log, Paths, ReportCache, SettingsCache } from './io/files'
 import { paneForGuard, closePane, closeTab, exec, giveFocus, layout as readLayout, navigate, openTab, pane as readPane, selectTab, showPane, titles as readTitles } from './io/pane'
@@ -38,6 +38,7 @@ const bandAtom = atom(
   { shape: 'band-2' },
 )
 const slackAtom = atom({ plugin: 'worknt', key: 'slack' } as const, null as Slack | null, { shape: 'slack-2' })
+const lingerAtom = atom({ plugin: 'worknt', key: 'linger' } as const, null as Linger | null, { shape: 'linger-1' })
 
 /**
  * Development only. When true, the mod takes button presses from a file and
@@ -68,7 +69,7 @@ export type Ctx = {
   titles: Record<string, string>
   titlesAt: number
   slack: Slack | null
-  linger: { tabId: string; site: SiteId; until: number } | null
+  linger: Linger | null
   lingerTimer: Timer | null
   chain: Promise<unknown>
   loop: Timer | null
@@ -282,16 +283,24 @@ async function askPage($: $, slack: Slack): Promise<PageStats | 'missing' | null
 const HOLD: PageWant = { mode: 'hold', hold: true, card: null, note: null, toast: null }
 const REST: PageWant = { mode: 'rest', hold: false, card: null, note: null, toast: null }
 
-const dropLinger = (c: Ctx): void => {
+/** The one place the kept tab is set or forgotten; it is written down so a reload does not lose it. */
+async function setLinger($: $, c: Ctx, value: Linger | null, now: number): Promise<void> {
   c.lingerTimer?.cancel()
   c.lingerTimer = null
-  c.linger = null
+  c.linger = value
+  await update($, lingerAtom, () => value)
+  if (value !== null) {
+    c.lingerTimer = $.clock.after(Math.max(1000, value.until - now), () => {
+      c.lingerTimer = null
+      void enqueue(c, () => closeLinger($, c))
+    })
+  }
 }
 
 /** R-3: the kept tab's time is up. Closes it only if it is still ours to close. */
 async function closeLinger($: $, c: Ctx): Promise<void> {
   const held = c.linger
-  dropLinger(c)
+  await setLinger($, c, null, 0)
   if (held === null || c.slack !== null) return
   const now = await readPane($)
   const tab = now?.tabs.find(candidate => candidate.tabId === held.tabId)
@@ -317,8 +326,10 @@ async function startSlack($: $, c: Ctx): Promise<void> {
   if (kept !== null && kept.site === site && before !== null && before.tabs.some(tab => tab.tabId === kept.tabId && isSiteUrl(tab.origin))) {
     tabId = kept.tabId
   }
-  if (tabId === null && kept !== null && before !== null) await closeTab($, kept.tabId)
-  dropLinger(c)
+  if (tabId === null && kept !== null && before !== null && before.tabs.some(tab => tab.tabId === kept.tabId && isSiteUrl(tab.origin))) {
+    await closeTab($, kept.tabId)
+  }
+  await setLinger($, c, null, now)
   if (tabId === null) tabId = await openTab($, SITES[site].feedUrl)
   if (tabId === null) {
     c.hasFailed = true
@@ -344,6 +355,7 @@ async function startSlack($: $, c: Ctx): Promise<void> {
     cardId: null,
     quietSince: 0,
     toasted: {},
+    toast: null,
     counted: { load: 0, videos: 0, watchMs: 0 },
     ackedActs: 0,
     watchMs: 0,
@@ -374,10 +386,7 @@ export async function endSlack($: $, c: Ctx, why: EndWhy): Promise<void> {
     if (pane === null) isTabAlive = rested !== null
   }
   if (isTabAlive && why !== 'left' && why !== 'unusable') {
-    c.linger = { tabId: slack.tabId, site: slack.site, until: now + LINGER_MS }
-    c.lingerTimer = $.clock.after(LINGER_MS, () => {
-      void enqueue(c, () => closeLinger($, c))
-    })
+    await setLinger($, c, { tabId: slack.tabId, site: slack.site, until: now + LINGER_MS }, now)
   }
   // S-2: only undo what we did. If our tab is no longer in front, the person has moved on already.
   if (isTabAlive && pane !== null && pane.tabs.find(tab => tab.isActive)?.tabId === slack.tabId && why !== 'left') {
@@ -419,6 +428,8 @@ async function reveal($: $, c: Ctx, slack: Slack, now: number): Promise<boolean>
   }
   await showPane($)
   const hasFocus = await giveFocus($, slack.tabId)
+  // We have just put it on screen ourselves: do not wait a tick to find that out.
+  c.wasShown = true
   slack.stage = 'live'
   slack.seenAt = now
   note(c.log, now, `revealed after ${now - slack.openedAt}ms focus=${hasFocus}`)
@@ -536,7 +547,12 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
     slack.cardSince = wantedCard === null ? 0 : now
   }
   slack.quietSince = decision.isQuiet ? slack.quietSince || now : 0
-  if (decision.toasted !== null) slack.toasted = { ...slack.toasted, [decision.toasted.id]: decision.toasted.seq }
+  if (decision.toasted !== null && want.toast !== null) {
+    slack.toasted = { ...slack.toasted, [decision.toasted.id]: decision.toasted.seq }
+    slack.toast = { id: want.toast.id, text: want.toast.text, until: now + TOAST_MS }
+  } else if (slack.toast !== null && now >= slack.toast.until) {
+    slack.toast = null
+  }
   if (c.report.seen !== isVisible) {
     c.report = { ...c.report, seen: isVisible }
     await publish($, c, now)
@@ -666,6 +682,15 @@ export async function boot($: $, c: Ctx): Promise<void> {
         c.slack = held
         c.report = { ...c.report, claim: held.startedAt, seen: false }
         note(c.log, now, 'resumed a break after reload')
+      }
+      // R-3: nor does it forget a tab it still owes a closing.
+      const kept = await read($, lingerAtom)
+      if (kept !== null && c.slack === null) {
+        if (kept.until > now) await setLinger($, c, kept, now)
+        else {
+          c.linger = kept
+          await closeLinger($, c)
+        }
       }
       await publish($, c, now)
       await tick($, c)
