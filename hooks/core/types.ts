@@ -132,8 +132,12 @@ export type Card = {
   secondary: CardButton | null
   /** C-9: the secondary button's label on its 2nd, 3rd... press. */
   moreLabels: string[]
+  /** Past the last label, the button goes round again from this one. */
+  moreLoopFrom: number
   /** What `lines` is replaced by once "one more" has run out. */
   againLine: string
+  /** The same from the second extra clip on, with `{n}` for how many there have been. */
+  againMany: string
 }
 
 export type Note = { id: string; text: string; action: { id: 'home'; label: string } | null }

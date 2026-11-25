@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 (not released)
+
+- "One more" has more to say: after `One more` and `Last one, really` the button moves on to `Leave me alone`, `Let me have this` and a few others, and goes round again from there instead of stopping at one. From the second extra clip on, the card keeps count of them.
+
 ## 0.2.0 (2026-11-26)
 
 A rewrite. 0.1.x opened the video by itself in every session; 0.2.0 asks first and keeps one video for all sessions.

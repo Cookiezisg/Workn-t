@@ -95,7 +95,9 @@ export function decideHost(w: HostWorld): HostDecision {
       primary: { id: 'back', label: copy.attend },
       secondary: { id: 'more', label: copy.more[0] ?? '' },
       moreLabels: [...copy.more],
+      moreLoopFrom: copy.moreLoopFrom,
       againLine: copy.again,
+      againMany: copy.againMany,
     }
   } else if (working.length === 0 && finished.length > 0) {
     // C-1, C-4
@@ -120,7 +122,9 @@ export function decideHost(w: HostWorld): HostDecision {
       primary: { id: 'back', label: copy.back },
       secondary: { id: 'more', label: copy.more[0] ?? '' },
       moreLabels: [...copy.more],
+      moreLoopFrom: copy.moreLoopFrom,
       againLine: copy.again,
+      againMany: copy.againMany,
     }
   }
 

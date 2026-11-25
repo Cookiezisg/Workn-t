@@ -51,8 +51,12 @@ export type Copy = {
   watched: (watchMs: number, videos: number) => string
   back: string
   attend: string
+  /** C-9: what the "one more" button says, press after press. Past the end it goes round again from `moreLoopFrom`. */
   more: readonly string[]
+  moreLoopFrom: number
   again: string
+  /** The same, from the second extra clip on; `{n}` is how many there have been. */
+  againMany: string
   stillThere: string
   stay: string
   // Notes and toasts on the page
@@ -159,8 +163,10 @@ export const COPY: Record<Lang, Copy> = {
     watched: (watchMs, videos) => `你刷了 ${videos} 条，${clock(watchMs)}`,
     back: '回去看看',
     attend: '去处理',
-    more: ['再看一条', '真的最后一条', '行吧'],
+    more: ['再看一条', '真的最后一条', '你别管我了', '让我玩吧', '就一条', '我有分寸', '它又不会跑', '最后亿条', '行吧行吧'],
+    moreLoopFrom: 2,
     again: '这条看完了。',
+    againMany: '这条也看完了。已经多看 {n} 条了。',
     stillThere: '还在吗？',
     stay: '在',
     loginNote: '登录后自动开始。可能需要短信或扫码验证。想让登录保留下来：面板右上角 ⋯ → Keep cookies → Shared。',
@@ -263,8 +269,10 @@ export const COPY: Record<Lang, Copy> = {
     watched: (watchMs, videos) => `You watched ${videos} ${videos === 1 ? 'clip' : 'clips'}, ${clock(watchMs)}`,
     back: 'Back to work',
     attend: 'Go answer',
-    more: ['One more', 'Last one, really', 'Fine'],
+    more: ['One more', 'Last one, really', 'Leave me alone', 'Let me have this', 'Just one', 'I know my limits', 'It can wait', 'Fine, fine'],
+    moreLoopFrom: 2,
     again: 'That one is over.',
+    againMany: 'That one is over too. {n} extra so far.',
     stillThere: 'Still there?',
     stay: 'Yes',
     loginNote: 'It starts by itself once you are signed in. You may be asked to verify. To stay signed in: the pane’s ⋯ menu → Keep cookies → Shared.',

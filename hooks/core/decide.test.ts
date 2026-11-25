@@ -49,7 +49,8 @@ test('C-1: when the only session finishes, a card says so with how long it took'
   expect(d.want.card?.title).toBe('Claude 跑完了')
   expect(d.want.card?.lines[0]).toBe('用时 2:14')
   expect(d.want.card?.primary).toEqual({ id: 'back', label: '回去看看' })
-  expect(d.want.card?.moreLabels).toEqual(['再看一条', '真的最后一条', '行吧'])
+  expect(d.want.card?.moreLabels.slice(0, 4)).toEqual(['再看一条', '真的最后一条', '你别管我了', '让我玩吧'])
+  expect(d.want.card?.moreLoopFrom).toBe(2)
   expect(d.band).toEqual({ kind: 'card', text: 'Claude 跑完了' })
 })
 

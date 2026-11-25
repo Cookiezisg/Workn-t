@@ -21,7 +21,7 @@ import type { PageStats, PageWant, SiteId } from './types'
  * is therefore decided here, not by a round trip to the mod.
  */
 
-export const PAGE_VERSION = 24
+export const PAGE_VERSION = 25
 
 export type PageConfig = {
   v: number
@@ -382,6 +382,16 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       return e
     }
 
+    /** C-9: the "one more" button's words for the press to come. Past the last of them it goes round again, never back to the first. */
+    W.moreLabel = function (card: any): string {
+      var labels = card.moreLabels || []
+      var n = W.moreCount
+      if (n < labels.length) return labels[n]
+      var from = Math.max(0, Math.min(card.moreLoopFrom || 0, labels.length - 1))
+      var span = labels.length - from
+      return span > 0 ? labels[from + ((n - from) % span)] : ''
+    }
+
     W.isDark = function (): boolean {
       if (W.cfg.isDark === true || W.cfg.isDark === false) return W.cfg.isDark
       return !!(win.matchMedia && win.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -477,14 +487,20 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       if (locked) {
         var card = W.idleAsk ? null : want.card
         var title = W.idleAsk ? W.cfg.copy.stillThere : card.title
-        var lines = W.idleAsk ? [] : W.moreCount > 0 ? [card.againLine] : card.lines
+        var lines = W.idleAsk
+          ? []
+          : W.moreCount > 1 && card.againMany
+            ? [String(card.againMany).replace('{n}', String(W.moreCount))]
+            : W.moreCount > 0
+              ? [card.againLine]
+              : card.lines
         var box = W.el('div', font + 'margin:12px;padding:16px;border-radius:12px;box-sizing:border-box;background:' + bg + ';border:0.5px solid ' + line + ';', null)
         box.appendChild(W.el('div', 'font-size:15px;font-weight:500;line-height:1.4;color:' + fg + ';', title))
         for (var i = 0; i < lines.length; i++) {
           box.appendChild(W.el('div', 'font-size:13px;line-height:1.5;margin-top:2px;color:' + dim + ';', lines[i]))
         }
         var row = W.el('div', 'display:flex;gap:8px;margin-top:14px;', null)
-        var btn = font + 'flex:1;height:36px;border-radius:8px;font-size:13px;cursor:pointer;padding:0 10px;'
+        var btn = font + 'flex:1;min-width:0;height:36px;border-radius:8px;font-size:13px;cursor:pointer;padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'
         var firstLabel = W.idleAsk ? W.cfg.copy.stay : card.primary.label
         var first = W.el('button', btn + 'border:0;background:' + fg + ';color:' + bg + ';', firstLabel)
         first.addEventListener('click', function () {
@@ -495,7 +511,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         var secondLabel = W.idleAsk
           ? W.cfg.copy.back
           : card.secondary
-            ? card.moreLabels[Math.min(W.moreCount, card.moreLabels.length - 1)] || card.secondary.label
+            ? W.moreLabel(card) || card.secondary.label
             : null
         if (secondLabel) {
           var second = W.el('button', btn + 'background:transparent;color:' + fg + ';border:0.5px solid ' + line + ';', secondLabel)

@@ -65,7 +65,7 @@ function makeApp(on: On, options: Options = {}) {
     return m ? `${m[1]}${m[2]}` : url
   }
   const stats = () => ({
-    v: 24, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
+    v: 25, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
     framesOk: true, inputAgo: 0, videos: app.videos, watchMs: app.watchMs, live: false, cardId: app.want?.card?.id ?? null, more: false, idleAsk: false, acts: app.acts, lost: false, err: null, steps: 0, why: '',
   })
 

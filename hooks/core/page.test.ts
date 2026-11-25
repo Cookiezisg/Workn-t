@@ -175,7 +175,7 @@ const want = (mode: PageWant['mode'], patch: Partial<PageWant> = {}): PageWant =
 const CARD: Card = {
   id: 'd:a:1', title: 'Claude 跑完了', lines: ['用时 2:14', '你刷了 5 条，2:05'],
   primary: { id: 'back', label: '回去看看' }, secondary: { id: 'more', label: '再看一条' },
-  moreLabels: ['再看一条', '真的最后一条', '行吧'], againLine: '这条看完了。',
+  moreLabels: ['再看一条', '真的最后一条', '行吧'], moreLoopFrom: 1, againLine: '这条看完了。', againMany: '这条也看完了。已经多看 {n} 条了。',
 }
 
 const feed = (site: SiteId = 'douyin') => {
@@ -340,8 +340,16 @@ test('C-9: "one more" plays one clip to its end, then the card is back with the 
   page.run(500)
   video.currentTime = 0.1
   page.run(500)
-  expect(page.drawn().at(-1)).toBe('行吧')
+  // From the second extra clip on, the card keeps count.
+  expect(page.drawn()).toEqual(['Claude 跑完了', '这条也看完了。已经多看 2 条了。', '回去看看', '行吧'])
   page.press('行吧')
+  video.currentTime = 5
+  page.run(500)
+  video.currentTime = 0
+  page.run(500)
+  // Past the last label the button goes round again from where the card says, never back to the first.
+  expect(page.drawn()).toEqual(['Claude 跑完了', '这条也看完了。已经多看 3 条了。', '回去看看', '真的最后一条'])
+  page.press('真的最后一条')
   video.currentTime = 5
   page.run(500)
   video.currentTime = 0
