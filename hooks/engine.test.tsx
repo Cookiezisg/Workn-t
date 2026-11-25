@@ -52,6 +52,8 @@ function makeApp(on: On, options: Options = {}) {
     /** Changes when the page starts over: a reload, or a new break on a kept page. */
     load: 1,
     paneOpens: 0,
+    /** A browser tool that refuses every call for now; null when all answer. */
+    failing: null as string | null,
     nextTab: 1,
   }
   if (options.settings) files.set(`${ROOT}/settings.json`, { text: JSON.stringify(options.settings), mtimeMs: NOW - 1000 })
@@ -123,6 +125,7 @@ function makeApp(on: On, options: Options = {}) {
     }
     if (options.hasBrowser === false) throw new Error('no such server')
     const tabId = typeof args.tabId === 'string' ? args.tabId : undefined
+    if (app.failing === tool) return refused(`${tool} is not answering`)
     switch (tool) {
       case 'tabs_context':
         return app.isListingRefused ? refused('this repeats a mcp__Claude_Browser__tabs_context call that is not allowed') : text(listing())
@@ -141,7 +144,12 @@ function makeApp(on: On, options: Options = {}) {
         }
         if (!tab) return refused('no such tab')
         tab.origin = originOf(String(args.url))
+        // A page that loads is a new page: no library, and its counters, when it has them again, start over.
         app.hasLibrary = false
+        app.load += 1
+        app.videos = 0
+        app.watchMs = 0
+        app.acts = []
         return text(JSON.stringify({ tabId: tab.tabId, navOk: true }))
       }
       case 'tabs_select':
@@ -848,4 +856,259 @@ test('C-14: "leave me alone" keeps the card away for the rest of this round, say
   await world.clock.advance(1500)
   expect(world.app.want?.mode).toBe('card')
   expect(world.app.want?.card?.id).not.toBe(card)
+})
+
+// ---- random walks ---------------------------------------------------------------------
+//
+// The tests above are scripts somebody thought of. These are not: each walk takes a few dozen
+// steps chosen by a seeded die (turns starting and ending, buttons, commands, the tab closed,
+// the pane hidden, another session taking the video, the page changing under us) and after
+// every step checks the things that must hold whatever happened.
+
+const rng = (seed: number) => {
+  let s = seed >>> 0
+  return (): number => {
+    s = (s + 0x6d2b79f5) >>> 0
+    let t = s
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+const SITE_ORIGINS = ['https://tiktok.com', 'https://douyin.com']
+
+async function walk($: any, on: On, seed: number, steps: number, withFaults: boolean): Promise<void> {
+  const world = makeApp(on, { settings: READY })
+  const { app, clock, tabs } = world
+  const die = rng(seed)
+  const pick = <T,>(list: readonly T[]): T => list[Math.floor(die() * list.length)] as T
+  const trail: string[] = []
+  let turn: string | null = null
+  let turns = 0
+  let actN = 0
+  let produced = 0
+  let other: Report | null = null
+  let openingFor = 0
+  let keptFor = 0
+
+  await start($, world)
+
+  const siteTabs = () => tabs.filter(tab => SITE_ORIGINS.includes(tab.origin))
+  const act = (id: string, arg?: string): void => {
+    actN += 1
+    app.acts = [...app.acts, arg === undefined ? { n: actN, id } : { n: actN, id, arg }]
+  }
+  const command = async (args: string): Promise<void> => {
+    await $.command.run({ command: 'worknt', args } as never)
+    await clock.settle()
+  }
+
+  const moves: Record<string, () => Promise<void>> = {
+    async typed() {
+      if (turn !== null) return
+      turn = `t${++turns}`
+      await typedTurn($, world, turn)
+    },
+    async woke() {
+      if (turn !== null) return
+      turn = `t${++turns}`
+      await $.prompt.submit({ text: '', origin: { kind: 'task-notification' } } as never)
+      await $.turn.start({ text: '', turnId: turn })
+      await clock.settle()
+    },
+    async ends() {
+      if (turn === null) return
+      const how = pick(['answer', 'answer', 'answer', 'error', 'aborted'])
+      await $.turn.complete({ reason: how, turnId: turn, answer: 'done', durationMs: 5000, isAborted: how === 'aborted' })
+      await clock.settle()
+      turn = null
+    },
+    async waits() { await clock.advance(pick([1000, 9000, 30_000, 90_000])) },
+    async waitsLong() { await clock.advance(11 * 60_000) },
+    async button() {
+      const band = await world.band($)
+      if (band.buttons.length > 0) await band.press(pick(band.buttons))
+    },
+    async go() { await command('go') },
+    async setting() { await command(pick(['sound on', 'sound off', 'live skip', 'live show', 'quiet', 'quiet off', 'here off', 'here on', 'delay 3', 'idle 2', 'bill', 'doctor', '', 'lang zh'])) },
+    async onOff() { await command(pick(['off', 'on', 'on'])) },
+    async otherSite() { await command(pick(['douyin', 'tiktok'])) },
+    async watches() {
+      // The page counts only while it is really playing.
+      if (app.want?.mode === 'play' && !app.want.hold && app.hasLibrary && app.health === 'feed' && world.report().claim !== null) {
+        const more = 1 + Math.floor(die() * 3)
+        app.videos += more
+        app.watchMs += more * 8000
+        produced += more
+      }
+    },
+    async pagePress() {
+      if (!app.hasLibrary || app.want === null) return
+      if (app.want.mode === 'card') act(pick(['back', 'more', 'more', 'free']), app.want.card?.id)
+      else if (app.want.mode === 'play') act(pick(['set', 'set', 'back', 'skip']), pick(['sound on', 'sound off', 'live skip', 'bogus thing']))
+      else if (app.want.mode === 'plain') act('home')
+    },
+    async closesTab() {
+      const tab = siteTabs()[0]
+      if (tab === undefined) return
+      tabs.splice(tabs.indexOf(tab), 1)
+      app.hasLibrary = false
+      app.want = null
+      app.acts = []
+      app.videos = 0
+      app.watchMs = 0
+    },
+    async hidesPane() { app.isPaneShown = !app.isPaneShown },
+    async leavesScreen() { app.isOnScreen = !app.isOnScreen },
+    async pageChanges() { app.health = pick(['feed', 'feed', 'feed', 'login', 'verify', 'elsewhere', 'unknown', 'loading']) },
+    async otherSession() {
+      const status = pick(['working', 'done', 'waiting', 'failed', 'working'] as const)
+      const takes = die() < 0.25
+      other = {
+        v: 1, id: 'sess-b', localId: 'local_b', cwd: '/proj/other', status, wait: status === 'waiting' ? 'approval' : null,
+        since: clock.now(), lastMs: 60_000, seq: (other?.seq ?? 0) + (status === 'done' || status === 'failed' ? 1 : 0),
+        beat: clock.now(), claim: takes ? clock.now() : null, seen: false,
+      }
+      world.writeReport(other)
+    },
+    async otherGoes() {
+      if (other === null) return
+      other = { ...other, status: 'gone', claim: null, beat: clock.now() }
+      world.writeReport(other)
+      other = null
+    },
+    async refusesListing() { if (withFaults) app.isListingRefused = !app.isListingRefused },
+    async breaks() { if (withFaults) app.failing = pick(['tabs_select', 'tabs_close', 'javascript_tool', 'navigate', 'tabs_create', 'computer', 'find', null, null]) },
+  }
+  const names = Object.keys(moves)
+
+  for (let i = 0; i < steps; i += 1) {
+    // The last stretch runs without faults, so that whatever they left behind has to have healed by the end.
+    if (withFaults && i === steps - 12) {
+      app.failing = null
+      app.isListingRefused = false
+    }
+    const name = withFaults && i >= steps - 12 ? pick(names.filter(one => one !== 'breaks' && one !== 'refusesListing')) : pick(names)
+    trail.push(name)
+    const say = (what: string): string => `seed ${seed}, step ${i} (${trail.slice(-12).join(' > ')}): ${what}`
+    await moves[name]?.()
+    // Let the mod notice: three seconds, with any other session still alive keeping its file fresh.
+    for (let k = 0; k < 3; k += 1) {
+      // (Read through a cast: the compiler cannot see that the moves above assign it.)
+      const alive = other as Report | null
+      if (alive !== null) {
+        other = { ...alive, beat: clock.now() }
+        world.writeReport(other)
+      }
+      await clock.advance(1000)
+    }
+
+    const report = world.report()
+    const band = await world.band($)
+    const isMine = report.claim !== null
+    const them = other as Report | null
+    const isOtherHost = them !== null && them.claim !== null && (report.claim === null || them.claim > report.claim)
+
+    // Nothing in the mod's own queue may throw, whatever happens outside it.
+    if (world.log().includes('ERROR job')) throw new Error(say(`a job threw: ${world.log().split('\n').filter(line => line.includes('ERROR')).join(' | ')}`))
+
+    // R-2: one video page, never two.
+    if (!withFaults && siteTabs().length > 1) throw new Error(say(`two video tabs: ${JSON.stringify(tabs)}`))
+    // R-5: a later claim elsewhere takes it.
+    if (isOtherHost && isMine) throw new Error(say('still holding the video after another session took it'))
+
+    // W-12: with no break, the line says nothing about one, and the page is left clean (R-3, R-4).
+    if (!isMine) {
+      if (/摸鱼中|正在打开|打开得有点慢/.test(band.text)) throw new Error(say(`no break, but the line says "${band.text}"`))
+      if (!withFaults && app.hasLibrary && app.want !== null && app.want.mode !== 'rest' && siteTabs().length > 0 && app.health !== 'left') {
+        throw new Error(say(`no break, but the page was left in "${app.want.mode}"`))
+      }
+    }
+    // A break shows on the line, unless the page is somewhere the line has nothing to say about (L-4).
+    if (isMine && !withFaults && app.want?.mode === 'card' && band.text !== app.want.card?.title) {
+      throw new Error(say(`the card says "${app.want.card?.title}", the line says "${band.text}"`))
+    }
+    // W-2: out of sight is held.
+    if (isMine && !withFaults && app.hasLibrary && app.want !== null && app.want.mode !== 'rest' && app.want.mode !== 'hold') {
+      const isVisible = app.isPaneShown && app.isOnScreen
+      if (band.text !== '' && !/正在打开|打开得有点慢/.test(band.text) && app.want.hold !== !isVisible) throw new Error(say(`visible=${isVisible} but hold=${app.want.hold}`))
+    }
+    // S-4: nothing stays "opening" for ever.
+    openingFor = /正在打开|打开得有点慢/.test(band.text) ? openingFor + 1 : 0
+    if (openingFor > 60) throw new Error(say('still opening after sixty steps'))
+    // R-3: a kept tab does not outlive its ten minutes by much.
+    keptFor = !isMine && siteTabs().length > 0 ? keptFor + (name === 'waitsLong' ? 11 * 60_000 : 3000) : 0
+    if (!withFaults && keptFor > 23 * 60_000) throw new Error(say('a video tab is still open long after its break ended'))
+
+    // P-1, P-4: switched on and awake, the model is kept off the video sites; switched off, it is not.
+    if (i % 4 === 0) {
+      const ran = (await $.tool.call({ tool: `${B}navigate`, url: 'https://www.douyin.com/user/x' } as never)) as { deny?: unknown }
+      const isOn = world.settings().isEnabled !== false
+      if (isOn && ran.deny === undefined) throw new Error(say('the model was let through to a video site'))
+      if (!isOn && ran.deny !== undefined) throw new Error(say('switched off, and the model was still refused'))
+      await clock.settle()
+    }
+  }
+
+  // W-10: every clip the page counted is in the tally once, no more and no less.
+  if (!withFaults) {
+    await command('off')
+    await clock.advance(3000)
+    let tallied = 0
+    for (const [path, file] of world.files) if (path.includes('/tally/')) tallied += (JSON.parse(file.text) as { videos: number }).videos
+    if (tallied !== produced) throw new Error(`seed ${seed}: the page counted ${produced} clips, the tally holds ${tallied} (${trail.join(' > ')})`)
+  }
+}
+
+for (const seed of [11, 12, 13, 14, 15, 16, 17, 18, 1005, 1039]) {
+  test(`random walk ${seed}: whatever the order of events, the things that must always hold do`, async ($, on) => {
+    await walk($, on, seed, 60, false)
+  })
+}
+
+for (const seed of [21, 22, 23, 24]) {
+  test(`random walk ${seed}, with outside calls failing: nothing throws, the guard holds, and the line stays truthful`, async ($, on) => {
+    await walk($, on, seed, 60, true)
+  })
+}
+
+test('R-5: another session taking the video ends this one\'s break even while its page is still loading, and the page is never brought out', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await start($, world)
+  await typedTurn($, world)
+  await world.clock.advance(10_000)
+  world.app.health = 'loading'
+  await (await world.band($)).press('accept')
+  expect(world.report().claim).not.toBeNull()
+
+  world.writeReport({ v: 1, id: 'sess-b', localId: 'local_b', cwd: '/proj/other', status: 'working', wait: null, since: world.clock.now(), lastMs: 0, seq: 0, beat: world.clock.now(), claim: world.clock.now() + 1, seen: true })
+  await world.clock.advance(1500)
+  expect(world.report().claim).toBeNull()
+  expect(world.app.isPaneShown).toBe(true) // as it was: the pane was open on the person's own tab
+  expect(world.tabs.find(tab => tab.isActive)?.tabId).toBe('work')
+  await world.clock.advance(4000)
+  expect(world.log()).toContain('why=moved')
+})
+
+test('W-10: a kept page that could not be put to rest still holds the last break\'s numbers; a new break does not count them again', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  world.app.videos = 4
+  world.app.watchMs = 30_000
+  await world.clock.advance(2500)
+  // The page stops answering just as the break is ended, so it is never told to rest.
+  world.app.failing = 'javascript_tool'
+  await (await world.band($)).press('give-up')
+  world.app.failing = null
+  expect(world.app.want?.mode).toBe('play')
+
+  await (await world.band($)).press('accept')
+  await world.clock.advance(2500)
+  world.app.videos = 5
+  world.app.watchMs = 38_000
+  await world.clock.advance(2500)
+  expect((await world.band($)).text).toBe('摸鱼中 0:08 · 1 条')
+  await (await world.band($)).press('give-up')
+  expect((await $.command.run({ command: 'worknt', args: 'bill' } as never)).text).toContain('你刷了 5 条')
 })

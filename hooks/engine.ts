@@ -7,7 +7,7 @@ import type { Copy } from './core/copy'
 import { TOAST_MS, decideGuest, decideHost } from './core/decide'
 import { PAGE_VERSION, isPageStats, statsScript, syncScript } from './core/page'
 import type { PageConfig, PageMenu } from './core/page'
-import { alive, isActive, newMemory, newReport, reduce } from './core/report'
+import { alive, hostOf, isActive, newMemory, newReport, reduce } from './core/report'
 import type { ReportEvent, ReportMemory } from './core/report'
 import type { TabInfo } from './core/guard'
 import { SITES, isSiteUrl } from './core/sites'
@@ -547,6 +547,11 @@ async function reveal($: $, c: Ctx, slack: Slack, now: number): Promise<boolean>
 }
 
 async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report[]): Promise<void> {
+  // R-5, section 8: switched off, or taken by another session. Both end it at once, wherever the page is: still loading included.
+  if (!settingsOf(c).isEnabled) return endSlack($, c, 'off')
+  const holder = hostOf(reports)
+  if (holder !== null && holder.id !== c.report.id) return endSlack($, c, 'moved')
+
   const pane = await readPane($)
   if (pane !== null) {
     rememberTabs(c, now, pane.tabs)
@@ -608,7 +613,9 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
   if (page !== null && page.mode !== 'rest') {
     // W-10: add only what is new since the last look; a reloaded page starts its counters over.
     // A page still at rest is showing the last break's numbers, which were counted then.
-    if (page.load !== slack.counted.load) slack.counted = { load: page.load, videos: 0, watchMs: 0 }
+    // The first look of a break only notes where the page's counters stand: whatever they hold was not watched in this break.
+    if (slack.counted.load === 0) slack.counted = { load: page.load, videos: page.videos, watchMs: page.watchMs }
+    else if (page.load !== slack.counted.load) slack.counted = { load: page.load, videos: 0, watchMs: 0 }
     const more = { videos: Math.max(0, page.videos - slack.counted.videos), watchMs: Math.max(0, page.watchMs - slack.counted.watchMs) }
     slack.counted = { load: page.load, videos: page.videos, watchMs: page.watchMs }
     slack.videos += more.videos
