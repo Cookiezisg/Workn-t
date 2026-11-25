@@ -180,6 +180,12 @@ export type PageStats = {
   acts: PageAct[]
   /** The page unlocked itself after losing contact (R-9). */
   lost: boolean
+  /** The last fault in the page's own timer step, if there has been one. */
+  err: string | null
+  /** How many times the page's own step has run: a number that stands still means the page's timer has stopped. */
+  steps: number
+  /** Why watch time is not being counted right now; empty when it is. */
+  why: string
 }
 
 /** Why the video page was let go (section 8). */

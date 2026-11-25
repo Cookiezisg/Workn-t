@@ -65,8 +65,8 @@ function makeApp(on: On, options: Options = {}) {
     return m ? `${m[1]}${m[2]}` : url
   }
   const stats = () => ({
-    v: 22, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
-    framesOk: true, inputAgo: 0, videos: app.videos, watchMs: app.watchMs, live: false, cardId: app.want?.card?.id ?? null, more: false, idleAsk: false, acts: app.acts, lost: false,
+    v: 23, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
+    framesOk: true, inputAgo: 0, videos: app.videos, watchMs: app.watchMs, live: false, cardId: app.want?.card?.id ?? null, more: false, idleAsk: false, acts: app.acts, lost: false, err: null, steps: 0, why: '',
   })
 
   on('env.get', () => ({ value: HOME }))
@@ -767,4 +767,41 @@ test('X-4: a reset ends the break, forgets every setting, and empties the logs',
   expect(world.settings()).toMatchObject({ site: null, sound: null, lang: null, hasSeenWelcome: false })
   expect(world.files.get(`${ROOT}/logs/sess-b.log`)?.text).toBe('')
   expect(world.log()).not.toContain('slack start')
+})
+
+test('/worknt go: the break starts now, with nobody working, and plays until the person is done with it', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await start($, world)
+  expect((await $.command.run({ command: 'worknt', args: 'go' } as never)).text).toBe('正在打开TikTok')
+  await world.clock.advance(2500)
+  expect(world.app.want?.mode).toBe('play')
+  expect((await $.command.run({ command: 'worknt', args: 'go' } as never)).text).toBe('已经开着了。')
+
+  // Twenty quiet minutes on, it is still up: nobody was working to begin with.
+  world.app.acts = []
+  await world.clock.advance(20 * 60_000)
+  expect(world.report().claim).not.toBeNull()
+  expect(world.log()).toContain('by command')
+
+  // A turn that comes and goes meanwhile calls the person back as any break does.
+  await typedTurn($, world)
+  await endTurn($, world)
+  await world.clock.advance(1500)
+  expect(world.app.want?.card?.title).toBe('Claude 跑完了')
+})
+
+test('/worknt go: asks what is not yet chosen first, and says so when switched off', async ($, on) => {
+  const world = makeApp(on)
+  await start($, world)
+  expect((await $.command.run({ command: 'worknt', args: 'go' } as never)).text).toContain('Pick a language')
+  let band = await world.band($)
+  expect(band.buttons).toEqual(['lang-zh', 'lang-en'])
+  await band.press('lang-zh')
+  await (await world.band($)).press('site-tiktok')
+  await (await world.band($)).press('sound-on')
+  await world.clock.advance(2500)
+  expect(world.app.want?.mode).toBe('play')
+
+  await $.command.run({ command: 'worknt', args: 'off' } as never)
+  expect((await $.command.run({ command: 'worknt', args: 'go' } as never)).text).toBe('Workn’t 关着。先运行 /worknt on。')
 })

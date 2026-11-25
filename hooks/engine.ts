@@ -37,7 +37,7 @@ const bandAtom = atom(
   { view: { kind: 'none' }, lang: 'en', site: null } as Band,
   { shape: 'band-3' },
 )
-const slackAtom = atom({ plugin: 'worknt', key: 'slack' } as const, null as Slack | null, { shape: 'slack-2' })
+const slackAtom = atom({ plugin: 'worknt', key: 'slack' } as const, null as Slack | null, { shape: 'slack-3' })
 const lingerAtom = atom({ plugin: 'worknt', key: 'linger' } as const, null as Linger | null, { shape: 'linger-1' })
 
 const NO_DAY = { agentMs: 0, watchMs: 0, videos: 0 }
@@ -86,6 +86,8 @@ export type Ctx = {
   log: Log
   /** The first-use question now on the line, while the person is answering them. */
   setup: 'lang' | 'site' | 'sound' | null
+  /** The break being set up was asked for by command (`/worknt go`). */
+  isManualSetup: boolean
   hasDeclined: boolean
   /** The person ended a break in the turn now running: no invitation until the next one. */
   hasLeft: boolean
@@ -132,6 +134,7 @@ export const newCtx = (): Ctx => ({
   loop: null,
   log: newLog(),
   setup: null,
+  isManualSetup: false,
   hasDeclined: false,
   hasLeft: false,
   canResume: false,
@@ -408,7 +411,7 @@ async function closeLinger($: $, c: Ctx): Promise<void> {
 }
 
 /** S-1 to S-3: this session takes the video page. */
-async function startSlack($: $, c: Ctx): Promise<void> {
+async function startSlack($: $, c: Ctx, isManual: boolean): Promise<void> {
   const settings = settingsOf(c)
   const site = settings.site
   if (c.slack !== null || site === null || !isAwake(c)) return
@@ -449,6 +452,7 @@ async function startSlack($: $, c: Ctx): Promise<void> {
     site,
     tabId,
     scene,
+    isManual,
     stage: 'opening',
     sawLogin: false,
     silentSince: 0,
@@ -466,7 +470,7 @@ async function startSlack($: $, c: Ctx): Promise<void> {
     videos: 0,
   }
   c.report = { ...c.report, claim: now, seen: false }
-  note(c.log, now, `slack start site=${site} tab=${tabId} paneOpen=${scene.isPaneOpen}`)
+  note(c.log, now, `slack start site=${site} tab=${tabId} paneOpen=${scene.isPaneOpen}${isManual ? ' by command' : ''}`)
   await publish($, c, now)
   await saveSlack($, c)
   await setBand($, c, { kind: 'opening', isSlow: false })
@@ -562,6 +566,7 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
     const asked = await askPage($, slack)
     page = asked === 'missing' ? await syncPage($, c, slack, slack.stage === 'opening' || c.sentWant === null ? HOLD : c.sentWant) : asked
   }
+  if (page !== null && page.err && page.err !== c.lastPage?.err) fail(c, now, 'page', page.err)
   c.lastPage = page
   slack.silentSince = page !== null ? 0 : slack.silentSince || now
   if (pane === null && page === null) {
@@ -874,6 +879,8 @@ export async function shutdown($: $, c: Ctx): Promise<void> {
 
 export type Press =
   | 'accept'
+  /** `/worknt go`: start now, invitation or not. */
+  | 'go'
   | 'decline'
   | 'quiet-yes'
   | 'quiet-no'
@@ -897,7 +904,9 @@ async function accept($: $, c: Ctx): Promise<void> {
   else if (settings.sound === null) c.setup = 'sound'
   else {
     c.setup = null
-    await startSlack($, c)
+    const isManual = c.isManualSetup
+    c.isManualSetup = false
+    await startSlack($, c, isManual)
   }
 }
 
@@ -909,11 +918,19 @@ export async function press($: $, c: Ctx, what: Press): Promise<void> {
     case 'accept':
     case 'retry':
       c.hasFailed = false
+      // Answering the invitation is not asking by command, unless it is the retry of one that was.
+      if (what === 'accept' && c.setup === null) c.isManualSetup = false
+      await accept($, c)
+      break
+    case 'go':
+      c.hasFailed = false
+      c.isManualSetup = true
       await accept($, c)
       break
     case 'decline': {
       c.hasDeclined = true
       c.setup = null
+      c.isManualSetup = false
       const declines = settingsOf(c).declines + 1
       await changeSettings($, c, { declines })
       if (declines >= 3) c.isAskingQuiet = true // I-6
@@ -951,6 +968,7 @@ export async function press($: $, c: Ctx, what: Press): Promise<void> {
     case 'give-up':
       c.hasFailed = false
       c.setup = null
+      c.isManualSetup = false
       await endSlack($, c, 'cancel')
       break
   }
@@ -979,6 +997,13 @@ async function devRemote($: $, c: Ctx): Promise<void> {
 
 // ---- the command ------------------------------------------------------------------
 
+/** Where the page is, without what is on it: the host and the shape of the path, every number and id blanked (P-7). */
+const routeOf = (url: string): string => {
+  const m = /^[a-z]+:\/\/([^/?#]+)([^?#]*)/i.exec(url)
+  if (!m) return '?'
+  return `${m[1]}${(m[2] ?? '').replace(/[^/]{12,}|\d+/g, '*')}`
+}
+
 async function doctor($: $, c: Ctx): Promise<string> {
   const now = await $.clock.now()
   const lines: string[] = []
@@ -1006,7 +1031,7 @@ async function doctor($: $, c: Ctx): Promise<string> {
   if (slack !== null) {
     lines.push(`break: ${slack.stage} site=${slack.site} tab=${slack.tabId} for ${Math.round((now - slack.startedAt) / 1000)}s card=${slack.cardId ?? '-'} watched=${Math.round(slack.watchMs / 1000)}s/${slack.videos}`)
     const page = c.lastPage
-    lines.push(page ? `page: mode=${page.mode} health=${page.health} playing=${page.playing} live=${page.live} frames=${page.framesOk} idle=${Math.round(page.inputAgo / 1000)}s lost=${page.lost}` : 'page: no answer')
+    lines.push(page ? `page: at=${routeOf(page.url)} mode=${page.mode} health=${page.health} playing=${page.playing} live=${page.live} frames=${page.framesOk} idle=${Math.round(page.inputAgo / 1000)}s lost=${page.lost} counted=${Math.round(page.watchMs / 1000)}s/${page.videos} steps=${page.steps}${page.why ? ` not-counting=${page.why}` : ''}${page.err ? ` fault=${page.err}` : ''}` : 'page: no answer')
   } else {
     lines.push(`break: none${c.lastWhy ? ` (last ended: ${c.lastWhy})` : ''}${c.linger ? ` · tab ${c.linger.tabId} kept for ${Math.max(0, Math.round((c.linger.until - now) / 1000))}s` : ''}`)
   }
@@ -1039,6 +1064,14 @@ export async function command($: $, c: Ctx, args: string): Promise<string> {
     // T-1: the pane is the way to change things; the line says how they stand, wherever a pane cannot be drawn.
     await openPanel($, c)
     return `${copy.status(settings.isEnabled, label(settings.site), sound, live, settings.delaySec, settings.idleMin)}\n${copy.usage}`
+  }
+  if (first === 'go') {
+    // The one command that is not a setting: the break, now, whether or not Claude is working.
+    if (!settings.isEnabled) return copy.goOff
+    if (c.slack !== null) return copy.goAlready
+    await enqueue(c, () => press($, c, 'go'))
+    if (c.setup !== null) return copy.goSetup
+    return c.hasFailed ? copy.openFailed(label(settings.site) ?? '') : copy.opening(label(settings.site) ?? '')
   }
   if (first === 'on' || first === 'off') {
     await enqueue(c, () => changeSettings($, c, { isEnabled: first === 'on' }))

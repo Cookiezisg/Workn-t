@@ -6,6 +6,7 @@ A rewrite. 0.1.x opened the video by itself in every session; 0.2.0 asks first a
 
 **How it behaves**
 
+- `/worknt go` starts a break now, without waiting to be asked and whether or not Claude is working.
 - It asks before doing anything: a line above the prompt, once Claude has worked for a few seconds. Nothing loads until you say yes.
 - One video page for all sessions. Other sessions say where it is and can take it over.
 - It calls you back with a card that locks the page: when everything has finished, when a session stops on an error, when a session is waiting for your answer or approval. Another session finishing while others still work is a small toast instead.

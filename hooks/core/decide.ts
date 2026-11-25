@@ -72,7 +72,8 @@ export function decideHost(w: HostWorld): HostDecision {
   if (page.acts.some(act => act.n > slack.ackedActs && act.id === 'back')) return { kind: 'end', why: 'back' }
   if (slack.cardSince > 0 && now - slack.cardSince >= CARD_TIMEOUT_MS) return { kind: 'end', why: 'timeout' }
   if (now - slack.seenAt >= AWAY_MS) return { kind: 'end', why: 'away' }
-  if (slack.cardSince === 0 && slack.quietSince > 0 && now - slack.quietSince >= QUIET_MS) return { kind: 'end', why: 'idle' }
+  // A break the person asked for by command stays for as long as they do: W-3 and the away rule still watch for an empty chair.
+  if (!slack.isManual && slack.cardSince === 0 && slack.quietSince > 0 && now - slack.quietSince >= QUIET_MS) return { kind: 'end', why: 'idle' }
 
   const waiting = w.reports.filter(report => report.status === 'waiting').sort((a, b) => a.since - b.since)
   const working = w.reports.filter(report => report.status === 'working' || report.status === 'self')
@@ -180,7 +181,7 @@ export function decideHost(w: HostWorld): HostDecision {
   return {
     kind: 'page',
     // C-5: nobody working and nothing to announce means the person stopped it themselves.
-    want: { mode: working.length > 0 ? 'play' : 'paused', hold, card: null, note: null, toast },
+    want: { mode: working.length > 0 || slack.isManual ? 'play' : 'paused', hold, card: null, note: null, toast },
     band: { kind: 'slack', watchMs: slack.watchMs, videos: slack.videos },
     isQuiet,
     toasted,

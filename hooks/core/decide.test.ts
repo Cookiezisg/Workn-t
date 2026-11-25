@@ -14,11 +14,11 @@ const rep = (id: string, patch: Partial<Report> = {}): Report => ({ ...newReport
 
 const page = (patch: Partial<PageStats> = {}): PageStats => ({
   v: 1, load: 1, mode: 'play', health: 'feed', url: 'https://www.douyin.com/?recommend=1', playing: true, framesOk: true,
-  inputAgo: 0, videos: 0, watchMs: 0, live: false, cardId: null, more: false, idleAsk: false, acts: [], lost: false, ...patch,
+  inputAgo: 0, videos: 0, watchMs: 0, live: false, cardId: null, more: false, idleAsk: false, acts: [], lost: false, err: null, steps: 0, why: '', ...patch,
 })
 
 const slack = (patch: Partial<Slack> = {}): Slack => ({
-  startedAt: NOW - 60_000, site: 'douyin', tabId: 'feed', scene: { isPaneOpen: false, activeTab: null }, stage: 'live',
+  startedAt: NOW - 60_000, site: 'douyin', tabId: 'feed', scene: { isPaneOpen: false, activeTab: null }, isManual: false, stage: 'live',
   sawLogin: false, silentSince: 0, openedAt: NOW - 60_000, patienceMs: 0, seenAt: NOW, cardSince: 0, cardId: null,
   quietSince: 0, toasted: {}, toast: null, counted: { load: 1, videos: 0, watchMs: 0 }, ackedActs: 0, watchMs: 125_000, videos: 5, ...patch,
 })
@@ -198,6 +198,20 @@ test('section 8: each way a break ends', () => {
 
 test('C-9: "one more" is not "back": the break goes on', () => {
   expect(decideHost(host({ page: page({ acts: [{ n: 1, id: 'more' }] }) })).kind).toBe('page')
+})
+
+test('a break asked for by command plays with nobody working, is not ended for quiet, and is still called back from', () => {
+  const idle = rep('a', { status: 'idle' })
+  const asked = host({ reports: [idle], slack: slack({ isManual: true, quietSince: NOW - 11 * 60_000 }) })
+  const playing = decideHost(asked)
+  expect(playing.kind === 'page' && playing.want.mode).toBe('play')
+  // The same break by invitation would have been paused, and let go after ten quiet minutes.
+  expect(decideHost(host({ reports: [idle], slack: slack({ quietSince: NOW - 11 * 60_000 }) }))).toEqual({ kind: 'end', why: 'idle' })
+  const paused = decideHost(host({ reports: [idle] }))
+  expect(paused.kind === 'page' && paused.want.mode).toBe('paused')
+  // A turn that finishes after it began still freezes it under a card.
+  const done = decideHost(host({ reports: [rep('a', { status: 'done', since: NOW - 1000, seq: 1 })], slack: slack({ isManual: true }) }))
+  expect(done.kind === 'page' && done.want.mode).toBe('card')
 })
 
 // ---- a guest: section 4 --------------------------------------------------------------

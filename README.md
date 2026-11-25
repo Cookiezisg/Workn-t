@@ -62,6 +62,7 @@ Three ways in, one set of settings, applied to every session at once. No restart
 
 | Command | What it does |
 | --- | --- |
+| `/worknt go` | Start a break now, without waiting to be asked, whether or not Claude is working |
 | `/worknt` | Opens the settings pane and shows the current settings |
 | `/worknt on` · `off` | The main switch. Off also lifts the guard |
 | `/worknt douyin` · `tiktok` | Source |
@@ -172,6 +173,7 @@ Shared 意味着所有会话的浏览器都带着你的登录。Workn't 开着�
 
 | 命令 | 作用 |
 | --- | --- |
+| `/worknt go` | 现在就开始摸鱼。不用等它来问，Claude 没在干活也可以 |
 | `/worknt` | 打开设置面板，并显示当前设置 |
 | `/worknt on` · `off` | 总开关。关掉后守卫也解除 |
 | `/worknt douyin` · `tiktok` | 换片源 |

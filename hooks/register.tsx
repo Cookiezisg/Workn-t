@@ -34,7 +34,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'worknt',
       description: 'Workn’t: videos while Claude works · 设置、账单、自查',
-      argumentHint: 'on | off | douyin | tiktok | sound | live | lang | delay | idle | quiet | here | bill | doctor | reset',
+      argumentHint: 'go | on | off | douyin | tiktok | sound | live | lang | delay | idle | quiet | here | bill | doctor | reset',
     })
 
     return next(e)

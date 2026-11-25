@@ -16,6 +16,8 @@ export type Slack = {
   site: SiteId
   tabId: string
   scene: Scene
+  /** The person asked for it by command, not by answering an invitation: it does not wait on anybody working. */
+  isManual: boolean
   /** `opening` until the page has been revealed. */
   stage: 'opening' | 'live'
   /** L-3: the page asked for a sign-in at some point; once it stops asking, go to the feed. */

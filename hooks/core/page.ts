@@ -21,7 +21,7 @@ import type { PageStats, PageWant, SiteId } from './types'
  * is therefore decided here, not by a round trip to the mod.
  */
 
-export const PAGE_VERSION = 22
+export const PAGE_VERSION = 23
 
 export type PageConfig = {
   v: number
@@ -107,6 +107,9 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       silenced: [],
       volTouched: false,
       pressing: false,
+      err: null,
+      steps: 0,
+      why: '',
       blocked: false,
       menuOpen: false,
       pick: {},
@@ -620,6 +623,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       var t = now()
       var dt = Math.max(0, Math.min(1500, t - W.lastTick))
       W.lastTick = t
+      W.steps += 1
 
       if (win.requestAnimationFrame && t - W.framesAt >= 1000) {
         W.framesOk = W.frames / ((t - W.framesAt) / 1000) >= 8
@@ -717,6 +721,9 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         W.listen(locked)
       }
 
+      // Why the clock is not running, when it is not: for the self-check.
+      W.why = !isFeed ? 'not-feed' : mode !== 'play' && !W.more ? 'mode-' + mode : W.idleAsk ? 'idle-ask' : W.want.hold ? 'held' : !W.framesOk ? 'unpainted' : !v ? 'no-video' : v.paused ? (W.userPaused ? 'paused-by-person' : 'paused') : v.ended ? 'ended' : ''
+
       // W-10: only what was really on screen and really playing counts.
       if (isRunning && shouldPlay && v && !v.paused && !v.ended) {
         W.watchMs += dt
@@ -739,6 +746,15 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       }
       W.view = { card: showCard, live: isFeed && (mode === 'play' || mode === 'paused'), cue: shouldPlay && W.blocked && !!v && v.paused }
       W.draw()
+    }
+
+    /** The timer's step. A fault in it must not pass unseen: it is kept, and told to the mod with everything else (D-4). */
+    W.beat = function (): void {
+      try {
+        W.step()
+      } catch (e) {
+        W.err = String((e && (e as any).message) || e).slice(0, 200)
+      }
     }
 
     // ---- listeners ---------------------------------------------------------
@@ -812,7 +828,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       W.armed = true
       for (var i = 0; i < TOUCH.length; i++) win.addEventListener(TOUCH[i], W.touched, { capture: true, passive: true })
       for (var j = 0; j < MEDIA.length; j++) doc.addEventListener(MEDIA[j], W.media, true)
-      W.timer = win.setInterval(W.step, 500)
+      W.timer = win.setInterval(W.beat, 500)
       W.frames = 0
       W.framesAt = now()
       W.framesOk = true
@@ -860,6 +876,9 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         idleAsk: W.idleAsk,
         acts: W.acts.slice(),
         lost: W.lost,
+        err: W.err || null,
+        steps: W.steps,
+        why: W.why,
       }
     }
   }
