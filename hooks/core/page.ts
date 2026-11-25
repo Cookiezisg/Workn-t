@@ -21,7 +21,7 @@ import type { PageStats, PageWant, SiteId } from './types'
  * is therefore decided here, not by a round trip to the mod.
  */
 
-export const PAGE_VERSION = 26
+export const PAGE_VERSION = 27
 
 export type PageConfig = {
   v: number
@@ -840,10 +840,12 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         return
       }
       if (isOurs) return
-      // W-4: a pause of the person's own is theirs to undo.
-      if (e.type === 'pause' && (W.want.mode === 'play' || W.more)) W.userPaused = true
+      // W-4: a pause of the person's own is theirs to undo. Only the clip in view speaks for the person:
+      // the site starts and stops the slides around it all the time.
+      var isInView = !e.target || e.target === W.cur()
+      if (e.type === 'pause' && isInView && (W.want.mode === 'play' || W.more)) W.userPaused = true
       if (e.type === 'play') {
-        W.userPaused = false
+        if (isInView) W.userPaused = false
         W.blocked = false
       }
     }

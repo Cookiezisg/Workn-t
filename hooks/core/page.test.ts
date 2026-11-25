@@ -151,7 +151,7 @@ function makePage(site: SiteId) {
       for (const fn of [...(winListeners[type] ?? [])]) fn(event)
       return { wasStopped }
     },
-    media(type: string): void { for (const fn of [...(docListeners[type] ?? [])]) fn({ type }) },
+    media(type: string, target?: unknown): void { for (const fn of [...(docListeners[type] ?? [])]) fn(target === undefined ? { type } : { type, target }) },
     touch(): void { for (const fn of [...(winListeners.pointerdown ?? [])]) fn({ type: 'pointerdown', composedPath: () => [] }) },
     up(): void { for (const fn of [...(winListeners.pointerup ?? [])]) fn({ type: 'pointerup', composedPath: () => [] }) },
     hostEl: (): any => host(),
@@ -860,4 +860,200 @@ test('live streams: left alone unless asked, and Douyin\'s own marker for a live
   off.sync(want('play'))
   off.run(5000)
   expect(off.ask().acts).toEqual([])
+})
+
+// ---- random walks over the page script ---------------------------------------------------
+//
+// The same idea as the walks over the whole mod: steps chosen by a seeded die, and after each
+// one the things that must hold on the page whatever came before.
+
+const dieOf = (seed: number) => {
+  let s = seed >>> 0
+  return (): number => {
+    s = (s + 0x6d2b79f5) >>> 0
+    let t = s
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function pageWalk(seed: number, steps: number): void {
+  const die = dieOf(seed)
+  const pick = <T,>(list: readonly T[]): T => list[Math.floor(die() * list.length)] as T
+  const { page, video } = feed(pick(['douyin', 'tiktok'] as const))
+  page.cfg.menu = menuOf('on', 'show')
+  const second = makeVideo('https://v.example/clip-2.mp4')
+  second.getBoundingClientRect = () => ({ left: 0, top: 800, right: 400, bottom: 1600 }) // the next slide, below the fold
+  page.videos.push(second)
+  const trail: string[] = []
+  // Declared through casts: these are assigned inside the moves below, which the compiler does not follow.
+  let mode = 'rest' as PageWant['mode']
+  let hold = false as boolean
+  let cardN = 1
+  let card = null as Card | null
+  let freedId = null as string | null
+  let last = null as PageStats | null
+  let personPaused = false as boolean
+
+  const send = (next: PageWant['mode']): void => {
+    mode = next
+    hold = next === 'hold' ? true : die() < 0.2
+    if (next === 'card') {
+      if (card === null || die() < 0.3) card = { ...CARD, id: `d:a:${++cardN}` }
+    } else card = null
+    if (next === 'play') personPaused = false
+    page.sync(want(next, { hold, card, toast: next === 'play' && die() < 0.3 ? { id: `t:${cardN}`, text: 'toast' } : null, note: next === 'plain' ? { id: 'elsewhere', text: 'note', action: { id: 'home', label: '回到推荐' } } : null }), last?.acts.at(-1)?.n ?? 0)
+  }
+
+  /** Time passing as it does on a real page: the timer steps only while the page is armed, and the mod asks every two seconds. */
+  const pass = (ms: number): void => {
+    for (let left = ms, n = 1; left > 0; left -= 500, n += 1) {
+      page.skip(500)
+      if (page.state().armed) page.step()
+      if (n % 4 === 0) page.ask()
+    }
+  }
+
+  send('rest')
+  const moves: Record<string, () => void> = {
+    play: () => send('play'),
+    card: () => send('card'),
+    hold: () => send('hold'),
+    paused: () => send('paused'),
+    plain: () => send('plain'),
+    rest: () => send('rest'),
+    time: () => pass(pick([500, 2000, 6000, 61_000, 6 * 60_000])),
+    // The site starts a clip by itself, as it does when a slide changes or an ad loads.
+    sitePlays: () => {
+      const one = pick([video, second])
+      one.play()
+      page.media('play', one)
+      // On the clip in view, a play the page did not ask for cannot be told from the person's own: the pause is over.
+      if (one === video) personPaused = false
+    },
+    clipEnds: () => { video.currentTime = 0.1 },
+    clipMoves: () => { video.currentTime += 5 },
+    personPauses: () => {
+      if (!video.paused) {
+        page.skip(1000) // well clear of anything the page did itself
+        video.pause()
+        page.media('pause')
+        personPaused = true
+      }
+    },
+    personPlays: () => {
+      if (video.paused && mode !== 'hold') {
+        page.skip(1000)
+        video.play()
+        page.media('play')
+        personPaused = false
+      }
+    },
+    pressSomething: () => {
+      const labels = page.drawn().filter(text => ['回去看看', '再看一条', '真的最后一条', '你别管我了', '在', '⋯', '静音', '有声', '划走', '照常', '回到推荐', '点一下开始'].includes(text))
+      if (labels.length === 0) return
+      const label = pick(labels)
+      if (label === '你别管我了') freedId = card?.id ?? null
+      page.press(label)
+    },
+    enter: () => { page.key('keydown', 'Enter') },
+    pointer: () => page.move(),
+    elsewhere: () => page.go(pick(['https://www.douyin.com/user/abc', 'https://www.douyin.com/?recommend=1', 'https://www.tiktok.com/foryou', 'https://www.tiktok.com/@a/video/1'])),
+    liveSlide: () => { video.duration = pick([Infinity, 15, NaN, 15]) },
+  }
+  const names = Object.keys(moves)
+
+  for (let i = 0; i < steps; i += 1) {
+    const name = pick(names)
+    trail.push(name)
+    const say = (what: string): string => `seed ${seed}, step ${i} (${trail.slice(-14).join(' > ')}): ${what}`
+    // Whether nothing about playing changed in this step, so that what held before it still holds after.
+    const before = { isStill: !['play', 'card', 'hold', 'paused', 'plain', 'rest', 'personPlays', 'personPauses', 'sitePlays', 'pressSomething', 'enter', 'elsewhere'].includes(name) }
+    moves[name]?.()
+    pass(500)
+    const stats = page.ask()
+    const W = page.state()
+    const drawn = page.drawn()
+    const isCardUp = drawn.includes(CARD.title)
+    const isAsking = drawn.includes('还在吗？')
+    const isLocked = isCardUp || isAsking
+
+    if (stats.err !== null) throw new Error(say(`the page's own step threw: ${stats.err}`))
+    if (stats.mode !== mode && !stats.lost) throw new Error(say(`told "${mode}", the page says "${stats.mode}"`))
+    // S-4: held means still and silent.
+    if (mode === 'hold' && (!video.paused || !second.paused)) throw new Error(say('held, and a clip is playing'))
+    // C-8: a card up means nothing plays and nothing but the card answers; no card means nothing is blocked.
+    if (isLocked && (!video.paused || !second.paused)) throw new Error(say('a card is up and a clip is playing'))
+    if (page.key('keydown', 'ArrowDown').wasStopped !== isLocked) throw new Error(say(`locked=${isLocked} but the keyboard says otherwise`))
+    // The card shows only in card mode on the feed, and never once it has been sent away (C-14).
+    if (isCardUp && (mode !== 'card' || stats.health !== 'feed')) throw new Error(say(`a card is drawn in mode "${mode}" on "${stats.health}"`))
+    if (isCardUp && card !== null && card.id === freedId) throw new Error(say('the card came back after being told to leave'))
+    // W-3: "still there?" belongs to a clip that is playing, and to nothing else.
+    if (isAsking && mode !== 'play') throw new Error(say(`"still there?" is up in mode "${mode}"`))
+    // R-3, R-4: at rest nothing of ours is left: nothing drawn (bar the lost note), no styling, no timer, no listeners.
+    if (mode === 'rest' && !stats.lost) {
+      if (page.hasHost()) throw new Error(say(`at rest, but something is drawn: ${drawn.join(',')}`))
+      if (page.hasCss() || W.armed || W.locked) throw new Error(say('at rest, but the page is still styled, armed or locked'))
+    }
+    // Principle 3: off the feed, the site's own layout is untouched.
+    if (stats.health !== 'feed' && page.hasCss()) throw new Error(say(`on "${stats.health}", and the navigation is still hidden`))
+    // W-4: a clip the person paused stays paused while the mode holds.
+    if (personPaused && mode === 'play' && stats.health === 'feed' && !isLocked && !video.paused && name !== 'personPlays' && name !== 'play') {
+      throw new Error(say('the person paused it and the page started it again'))
+    }
+    // W-10: the counters only go up within one load, and no clip is counted that was not watched for its second and a half.
+    if (last !== null && last.load === stats.load && (stats.watchMs < last.watchMs || stats.videos < last.videos)) throw new Error(say('a counter went down'))
+    if (stats.videos * 1500 > stats.watchMs + 1) throw new Error(say(`${stats.videos} clips counted in ${stats.watchMs} ms`))
+    // W-2, W-4: nor does time count while the page is out of sight or the person has paused the clip.
+    if (last !== null && last.load === stats.load && stats.watchMs > last.watchMs && before.isStill && (hold || personPaused) && mode === 'play') {
+      throw new Error(say(`time was counted with hold=${hold}, paused by the person=${personPaused}`))
+    }
+    // Nothing counts while nothing may play.
+    if (last !== null && last.load === stats.load && stats.watchMs > last.watchMs && (mode === 'hold' || mode === 'rest' || mode === 'paused' || mode === 'plain') && name !== mode) {
+      throw new Error(say(`time was counted in mode "${mode}"`))
+    }
+    last = stats
+  }
+}
+
+for (const seed of [31, 32, 33, 34, 35, 36, 9008, 9012]) {
+  test(`random walk ${seed} over the page: held is still, a card locks and only a card, rest leaves nothing, counts only go up`, () => {
+    pageWalk(seed, 220)
+  })
+}
+
+test('W-4: the site starting another slide does not undo the person\'s pause of the one in view', () => {
+  const { page, video } = feed()
+  const next = makeVideo('https://v.example/clip-2.mp4')
+  next.getBoundingClientRect = () => ({ left: 0, top: 800, right: 400, bottom: 1600 })
+  page.videos.push(next)
+  page.sync(want('play'))
+  page.skip(1000)
+  video.pause()
+  page.media('pause', video)
+  page.run(1000)
+  expect(video.paused).toBe(true)
+
+  next.play()
+  page.media('play', next)
+  page.run(2000)
+  expect(video.paused).toBe(true)
+
+  // Their own play of the clip in view is what ends it.
+  video.play()
+  page.media('play', video)
+  video.pause()
+  page.run(1000)
+  expect(video.paused).toBe(false)
+})
+
+test('W-3: "still there?" does not outlive the playing it asked about', () => {
+  const { page } = feed()
+  page.sync(want('play'))
+  page.live(5 * 60_000 + 2000)
+  expect(page.drawn()).toContain('还在吗？')
+  page.sync(want('paused'))
+  expect(page.drawn()).not.toContain('还在吗？')
+  expect(page.key('keydown', 'ArrowDown').wasStopped).toBe(false)
 })
