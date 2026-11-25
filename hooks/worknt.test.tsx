@@ -15,7 +15,7 @@ function pane(on: On) {
   const calls: Call[] = []
   let active = WORK
   let hasFeed = false
-  const stats = { videos: 0, watchMs: 0, action: null, frozen: null, more: false, playing: true, url: 'https://www.tiktok.com/foryou', load: 1 }
+  const stats = { videos: 0, watchMs: 0, action: null, frozen: null, more: false, playing: true, ready: true, url: 'https://www.tiktok.com/foryou', load: 1 }
 
   on('tool.call', (_, e) => {
     const call = e as unknown as Call
@@ -33,7 +33,7 @@ function pane(on: On) {
       active = String(call.tabId)
     } else if (name === 'javascript_tool') {
       // The page counts on while it plays: by the next question it has seen 3 clips.
-      if (String(call.text).includes('"stats"')) Object.assign(stats, { videos: 3, watchMs: 42000 })
+      if (String(call.text).includes('missing: true')) Object.assign(stats, { videos: 3, watchMs: 42000 })
       text = `${JSON.stringify(stats, null, 2)}\n\n(captured at origin https://tiktok.com)`
     }
 
@@ -57,10 +57,13 @@ test('a turn brings the feed up after the delay and freezes it when the turn end
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await $.turn.start({ text: 'refactor the parser', turnId: 't1' })
   await clock.advance(7000)
-  expect(named(browser.calls, 'navigate')).toHaveLength(0)
+  // Still waiting: the page is loaded behind the scenes and held, not shown.
+  expect(named(browser.calls, 'navigate')[0]?.url).toBe('https://www.tiktok.com/foryou')
+  expect(String(named(browser.calls, 'javascript_tool').at(-1)?.text)).toContain('"hold"')
+  expect(browser.front()).toBe(WORK)
 
   await clock.advance(1500)
-  expect(named(browser.calls, 'navigate')[0]?.url).toBe('https://www.tiktok.com/foryou')
+  expect(named(browser.calls, 'navigate')).toHaveLength(1)
   expect(browser.front()).toBe(FEED)
   expect(String(named(browser.calls, 'javascript_tool').at(-1)?.text)).toContain('"play"')
 

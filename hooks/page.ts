@@ -10,9 +10,9 @@
  * - nothing is read from the page except video elements and their state.
  */
 
-export const PAGE_VERSION = 8
+export const PAGE_VERSION = 11
 
-export type PageCommand = 'play' | 'freeze' | 'park' | 'boss' | 'stats'
+export type PageCommand = 'play' | 'freeze' | 'park' | 'hold' | 'boss' | 'stats'
 
 export type PageConfig = {
   site: 'douyin' | 'tiktok'
@@ -41,10 +41,12 @@ export type PageStats = {
   /** 'back' once the person pressed the card's first button; cleared by play. */
   action: 'back' | null
   /** Why the page is frozen, or null. */
-  frozen: 'done' | 'approval' | 'boss' | null
+  frozen: 'done' | 'approval' | 'boss' | 'hold' | null
   /** True while a "one more" clip is running. */
   more: boolean
   playing: boolean
+  /** True once the clip in view has data to show: the site's first load is over. */
+  ready: boolean
   url: string
   /** Changes when the page reloads, so counters can be told apart. */
   load: number
@@ -59,7 +61,7 @@ const LIB = String.raw`
     W = window.__worknt = {
       v: V, load: Date.now(), videos: 0, watchMs: 0, seen: {}, last: Date.now(),
       frozen: null, card: null, more: null, moreCount: 0, action: null, host: null, root: null,
-      dwellKey: null, dwellMs: 0
+      dwellKey: null, dwellMs: 0, locked: false
     };
 
     W.cur = function () {
@@ -136,10 +138,10 @@ const LIB = String.raw`
       var back = W.el('button', btn + 'border:0;background:' + fg + ';color:' + bg + ';', c.back);
       var label = c.more[Math.min(W.moreCount, c.more.length - 1)];
       var more = W.el('button', btn + 'background:transparent;color:' + fg + ';border:0.5px solid ' + line + ';', label);
-      back.addEventListener('click', function () { W.action = 'back'; W.frozen = null; W.card = null; W.more = null; W.clear(); });
+      back.addEventListener('click', function () { W.action = 'back'; W.frozen = null; W.card = null; W.more = null; W.clear(); W.sync(); });
       more.addEventListener('click', function () {
         var v = W.cur();
-        W.moreCount += 1; W.frozen = null; W.clear();
+        W.moreCount += 1; W.frozen = null; W.clear(); W.sync();
         W.more = { key: W.key(v), lastT: v ? v.currentTime : 0, at: Date.now() };
         if (v) { try { var p = v.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {} }
       });
@@ -158,6 +160,7 @@ const LIB = String.raw`
     W.tick = function () {
       var now = Date.now(), dt = Math.min(1500, now - W.last);
       W.last = now;
+      W.sync();
       if (W.frozen) { W.pauseAll(); return; }
       var v = W.cur();
       var playing = !!(v && !v.paused && !v.ended);
@@ -183,12 +186,22 @@ const LIB = String.raw`
       if (e.cancelable) e.preventDefault();
     };
 
+    // The blocking listeners are non-passive, which costs the page its smooth
+    // scrolling, so they are attached only while a card or the boss page is up.
     var events = ['keydown', 'keyup', 'keypress', 'wheel', 'touchmove', 'pointerdown', 'mousedown', 'click'];
-    for (var i = 0; i < events.length; i++) window.addEventListener(events[i], W.block, { capture: true, passive: false });
+    W.sync = function () {
+      var want = !!W.frozen;
+      if (want === W.locked) return;
+      W.locked = want;
+      for (var i = 0; i < events.length; i++) {
+        if (want) window.addEventListener(events[i], W.block, { capture: true, passive: false });
+        else window.removeEventListener(events[i], W.block, { capture: true });
+      }
+    };
     W.timer = setInterval(W.tick, 500);
     W.dispose = function () {
       clearInterval(W.timer);
-      for (var i = 0; i < events.length; i++) window.removeEventListener(events[i], W.block, { capture: true });
+      W.frozen = null; W.sync();
       W.clear();
     };
   }
@@ -225,6 +238,8 @@ const LIB = String.raw`
     if (v && v.paused) { try { var p = v.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {} }
   } else if (cmd === 'freeze') {
     W.freeze(arg);
+  } else if (cmd === 'hold') {
+    W.frozen = 'hold'; W.card = null; W.more = null; W.clear(); W.pauseAll();
   } else if (cmd === 'park') {
     W.frozen = null; W.card = null; W.more = null; W.clear(); W.pauseAll();
   } else if (cmd === 'boss') {
@@ -236,13 +251,36 @@ const LIB = String.raw`
     r2.appendChild(pre);
   }
 
+  W.sync();
   var cur = W.cur();
   return {
     videos: W.videos, watchMs: W.watchMs, action: W.action, frozen: W.frozen, more: !!W.more,
-    playing: !!(cur && !cur.paused && !cur.ended), url: location.href, load: W.load
+    playing: !!(cur && !cur.paused && !cur.ended), ready: !!(cur && cur.readyState >= 2),
+    url: location.href, load: W.load
   };
 })
 `
+
+const STATS = String.raw`
+(function (v) {
+  var W = window.__worknt;
+  if (!W || W.v !== v) return { missing: true };
+  var cur = W.cur();
+  return {
+    videos: W.videos, watchMs: W.watchMs, action: W.action, frozen: W.frozen, more: !!W.more,
+    playing: !!(cur && !cur.paused && !cur.ended), ready: !!(cur && cur.readyState >= 2),
+    url: location.href, load: W.load
+  };
+})
+`
+
+/**
+ * Reads the counters without resending the library: what the mod asks every
+ * few seconds. Answers `{ missing: true }` on a page that has not been set up.
+ */
+export function statsScript(): string {
+  return `${STATS.trim()}(${PAGE_VERSION})`
+}
 
 /** The text to hand the browser pane's script tool: one expression that answers PageStats. */
 export function pageScript(

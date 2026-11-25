@@ -1,6 +1,6 @@
 {
   "name": "worknt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Short videos in the browser pane while Claude works. They freeze the moment Claude is done.",
   "author": {
     "name": "Sun Weilin"

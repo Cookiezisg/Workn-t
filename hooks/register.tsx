@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Band, Feed, Phase } from '../types'
 import { BOSS_LOG, COPY } from './copy'
 import type { Copy, Lang } from './copy'
-import { pageScript } from './page'
+import { pageScript, statsScript } from './page'
 import type { BossArg, FreezeArg, PageCommand, PageStats, PlayArg } from './page'
 import { SITES } from './sites'
 import type { Site, SiteId } from './sites'
@@ -15,6 +15,9 @@ const CLOSE_PANE = 'mcp__ccd_view__close_pane'
 /** Browser tools that act on no tab, so they can never land on the feed. */
 /** Development only: a file path the mod writes its transitions to. null in a release. */
 const DEBUG_LOG: string | null = null
+
+/** How long a freshly loaded feed may stay out of sight while it settles. */
+const SETTLE_MS = 8000
 
 const TABLESS = new Set([
   'tabs_context',
@@ -117,6 +120,10 @@ type Ctx = {
   settings: { isEnabled: boolean; site: SiteId } | null
   ownCalls: Set<string>
   trace: string[]
+  /** True from the moment the feed's page was loaded afresh until it has been told to hold or play. */
+  isFresh: boolean
+  /** When the feed's page was last loaded afresh, in ms; 0 when it never was this session. */
+  loadedAt: number
 }
 
 /** Browser work runs one step at a time, in the order asked. */
@@ -209,11 +216,16 @@ const page = async (
   const { tabId } = await read($, feedAtom)
   if (!tabId) return null
   const at = await site($, c)
-  const ran = await browser($, c, 'javascript_tool', {
+  const full = pageScript({ site: at.id, css: at.css, tips: at.tips }, command, arg)
+  let ran = await browser($, c, 'javascript_tool', {
     action: 'javascript_exec',
     tabId,
-    text: pageScript({ site: at.id, css: at.css, tips: at.tips }, command, arg),
+    text: command === 'stats' ? statsScript() : full,
   })
+  if (command === 'stats' && firstJson(ran.text)?.missing === true) {
+    // The page reloaded and lost the library: send it whole this once.
+    ran = await browser($, c, 'javascript_tool', { action: 'javascript_exec', tabId, text: full })
+  }
   if (ran.deny !== undefined || ran.isError === true) {
     c.trace.push(`page ${command} FAILED ${String(ran.deny ?? ran.text).slice(0, 300)}`)
     return null
@@ -256,7 +268,7 @@ const ensureFeed = async ($: $, c: Ctx): Promise<string | null> => {
   const at = await site($, c)
   const held = await read($, feedAtom)
   let now = await tabs($, c)
-  if (c.phase !== 'frozen') {
+  if (c.before === null) {
     c.before = { open: now.open, active: now.tabs.find(tab => tab.isActive)?.tabId ?? null }
   }
   let tabId = held.tabId !== null && now.tabs.some(tab => tab.tabId === held.tabId) ? held.tabId : null
@@ -264,6 +276,8 @@ const ensureFeed = async ($: $, c: Ctx): Promise<string | null> => {
   if (tabId === null) {
     if (!now.open) {
       const opened = firstJson((await browser($, c, 'navigate', { url: at.feedUrl })).text)
+      c.isFresh = true
+      c.loadedAt = await $.clock.now()
       tabId = typeof opened?.tabId === 'string' ? opened.tabId : null
       if (tabId === null) {
         now = await tabs($, c)
@@ -280,15 +294,30 @@ const ensureFeed = async ($: $, c: Ctx): Promise<string | null> => {
   if (tabId === null) return null
   if (mustNavigate) {
     await browser($, c, 'navigate', { url: at.feedUrl, tabId })
+    c.isFresh = true
+    c.loadedAt = await $.clock.now()
   }
   await update($, feedAtom, () => ({ tabId, site: at.id }))
   return tabId
 }
 
+/**
+ * Loads the feed's page behind the scenes while a turn is still young, so the
+ * site's own slow first load is over before anyone looks at it. The page is
+ * held paused: a background tab would otherwise play out loud.
+ */
+const warm = async ($: $, c: Ctx): Promise<void> => {
+  const tabId = await ensureFeed($, c)
+  if (tabId !== null && c.isFresh) {
+    c.isFresh = false
+    await page($, c, 'hold', null)
+  }
+}
+
 const schedulePoll = ($: $, c: Ctx): void => {
   stopPoll(c)
   const isFast = c.phase === 'frozen' && c.frozenAt > 0
-  c.pollTimer = $.clock.after(isFast ? 1500 : 4000, () => {
+  c.pollTimer = $.clock.after(isFast ? 1500 : 5000, () => {
     c.pollTimer = null
     void queue(c, async () => {
       if (c.phase !== 'showing' && c.phase !== 'frozen') return
@@ -323,11 +352,20 @@ const show = async ($: $, c: Ctx): Promise<void> => {
     await setBand($, c)
     return
   }
+  // A page loaded moments ago is still busy with the site's own start-up,
+  // which stutters. Keep it out of sight until its first clip has data, or
+  // eight seconds have passed since the load, whichever comes first.
+  while (c.loadedAt > 0 && (await $.clock.now()) - c.loadedAt < SETTLE_MS) {
+    const peek = await page($, c, 'stats', null)
+    if (peek?.ready === true) break
+    await $.clock.sleep(700)
+  }
   await browser($, c, 'tabs_select', { tabId })
   const shown = await tool($, c, { tool: SHOW_PANE, pane: 'preview' })
   c.trace.push(`show_pane -> ${String(shown.deny ?? shown.text).replace(/\s+/g, ' ').slice(0, 200)}`)
   const introKey = `intro:${at.id}`
   const isFirst = (await $.store.get(introKey)) !== true
+  c.isFresh = false
   let stats = await page($, c, 'play', { intro: isFirst ? c.copy.intro : null })
   if (stats && !at.isFeed(stats.url)) {
     await browser($, c, 'navigate', { url: at.feedUrl, tabId })
@@ -452,6 +490,8 @@ export const register: Register = (on, options) => {
     settings: null,
     ownCalls: new Set<string>(),
     trace: [],
+    isFresh: false,
+    loadedAt: 0,
   }
 
   on('session.start', async ($, e, next) => {
@@ -474,6 +514,7 @@ export const register: Register = (on, options) => {
         c.carried = { videos: 0, watchMs: 0 }
         c.committed = { videos: 0, watchMs: 0 }
         c.isAwaitingApproval = false
+        if (c.phase !== 'frozen' && c.phase !== 'showing') c.before = null
 
         const today = dayOf(now)
         if ((await $.store.get('billDay')) !== today) {
@@ -501,6 +542,7 @@ export const register: Register = (on, options) => {
           c.armTimer = null
           void queue(c, () => trigger($, c))
         })
+        await warm($, c)
       })
     }
 
