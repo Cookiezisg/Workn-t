@@ -50,13 +50,6 @@ const panelAtom = atom({ plugin: 'worknt', key: 'panel' } as const, EMPTY_PANEL,
 /** T-1: the settings pane's name, here and where it is drawn. */
 export const PANE_ID = 'worknt'
 
-/**
- * Development only. When true, the mod takes button presses from a file and
- * writes its self-report to another on every tick, so it can be driven and
- * watched without a person at the keyboard. Always false in a release.
- */
-const DEV_REMOTE = false
-
 /** R-3: how long the tab is kept, paused, after the break ends. */
 const LINGER_MS = 10 * 60_000
 /** S-4: how long a load may take before the person is asked. */
@@ -109,7 +102,6 @@ export type Ctx = {
   errors: string[]
   lastPage: PageStats | null
   lastWhy: string
-  devN: number
   bootTries: number
   /** The pane's tabs as last listed by anyone, for the guard to fall back on. */
   tabsSeen: { at: number; tabs: readonly TabInfo[] } | null
@@ -153,7 +145,6 @@ export const newCtx = (): Ctx => ({
   errors: [],
   lastPage: null,
   lastWhy: '',
-  devN: -1,
   bootTries: 0,
   tabsSeen: null,
   wasShown: true,
@@ -746,8 +737,7 @@ export async function tick($: $, c: Ctx): Promise<void> {
   if (c.slack === null) await guestTick($, c, now, reports)
   if ((isActive(c.report.status) || c.slack !== null) && now - c.publishedAt >= 5000) await publish($, c, now)
   await settleTally($, c, now, false)
-  await flushLog($, c.p, c.report.id, c.log, now, DEV_REMOTE, settingsOf(c).resetAt)
-  if (DEV_REMOTE) await devRemote($, c)
+  await flushLog($, c.p, c.report.id, c.log, now, false, settingsOf(c).resetAt)
   const delay = nextDelay(c)
   if (delay !== null) schedule($, c, delay)
 }
@@ -987,26 +977,6 @@ export async function press($: $, c: Ctx, what: Press): Promise<void> {
       break
   }
   await tick($, c)
-}
-
-async function devRemote($: $, c: Ctx): Promise<void> {
-  if (c.p === null) return
-  const asked = (await readJson($, `${c.p.root}/dev.json`)) as { n?: unknown; press?: unknown } | null
-  if (asked !== null && typeof asked.n === 'number' && asked.n !== c.devN) {
-    const isFirstLook = c.devN === -1
-    c.devN = asked.n
-    // A request left over from before this load is not for us.
-    if (!isFirstLook && typeof asked.press === 'string') {
-      // `cmd:<words>` runs the command as typed; `key:<name>` presses a key in the video tab; anything else is a button.
-      if (asked.press.startsWith('cmd:')) void command($, c, asked.press.slice(4))
-      else if (asked.press.startsWith('key:')) {
-        if (c.slack !== null) await pressKey($, c.slack.tabId, asked.press.slice(4))
-      } else await press($, c, asked.press as Press)
-    }
-  }
-  try {
-    await $.fs.write(`${c.p.root}/dev-doctor.txt`, `${await doctor($, c)}\nband: ${c.lastBand}\n`)
-  } catch {}
 }
 
 // ---- the command ------------------------------------------------------------------
