@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 (not released)
+## 0.2.1 (2026-11-26)
 
 - `Leave me alone`. After `One more` and `Last one, really`, the third time the card comes back its button no longer asks for one more clip: it sends the card away for the rest of that round. Clips play on, nothing locks, and the break is not ended for nobody working. The next thing to happen (another turn finishing, a session waiting on you) is a new card and calls you back as before.
 - From the second extra clip on, the card keeps count of them.
