@@ -4,10 +4,6 @@ A video break in Claude's browser pane while Claude works. It asks first, plays 
 
 Claude 干活的时候，在它的浏览器面板里刷会儿视频。它先问你，全局只开一个，需要你的时候把你叫回来。
 
-> **Status: 0.2.0, a rewrite, not released yet.** It is being tested on the `rewrite` branch. `main` still holds 0.1.1, an early demo with known problems; do not install that one.
->
-> **状态：0.2.0 是一次重写，还没有发布。** 正在 `rewrite` 分支上测试。`main` 上仍是 0.1.1，一个问题很多的早期演示版，请不要安装。
-
 [English](#english) · [中文](#中文)
 
 ---
@@ -38,7 +34,7 @@ If you leave a break while Claude is still working, it does not ask you again in
 /plugin install worknt --marketplace Cookiezisg/Workn-t
 ```
 
-Until 0.2.0 is released this installs 0.1.1; see the status note above. To update later, run `/plugin update worknt` and start a new session.
+To update later, run `/plugin update worknt` and start a new session. Coming from 0.1.x: 0.2.0 is a rewrite and behaves differently, see `CHANGELOG.md`.
 
 ### Requirements
 
@@ -151,7 +147,7 @@ Claude 还在干活的时候你自己走开了，这个回合里它不会再问�
 /plugin install worknt --marketplace Cookiezisg/Workn-t
 ```
 
-0.2.0 发布之前，这条命令装到的是 0.1.1，见上面的状态说明。以后更新：运行 `/plugin update worknt`，然后新开一个会话。
+以后更新：运行 `/plugin update worknt`，然后新开一个会话。从 0.1.x 升级：0.2.0 是一次重写，行为不一样，见 `CHANGELOG.md`。
 
 ### 需要什么
 

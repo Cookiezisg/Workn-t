@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (not released)
+## 0.2.0 (2026-11-26)
 
 A rewrite. 0.1.x opened the video by itself in every session; 0.2.0 asks first and keeps one video for all sessions.
 

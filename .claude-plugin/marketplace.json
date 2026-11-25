@@ -1,6 +1,6 @@
 {
   "name": "worknt",
-  "description": "Workn't: short videos in Claude's browser pane while Claude works, frozen the moment it is done.",
+  "description": "Workn't: a video break in Claude's browser pane while Claude works. It asks first, plays in one place only, and calls you back when you are needed.",
   "owner": { "name": "Sun Weilin" },
   "plugins": [{ "name": "worknt", "source": "./" }]
 }
