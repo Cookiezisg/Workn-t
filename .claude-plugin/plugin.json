@@ -1,0 +1,42 @@
+{
+  "name": "worknt",
+  "version": "0.1.0",
+  "description": "Short videos in the browser pane while Claude works. They freeze the moment Claude is done.",
+  "author": {
+    "name": "Sun Weilin"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "source": {
+      "type": "string",
+      "title": "Source",
+      "description": "Where the videos come from. Auto picks Douyin for a Chinese system language and TikTok otherwise.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "douyin",
+        "tiktok"
+      ]
+    },
+    "delaySeconds": {
+      "type": "number",
+      "title": "Delay before it appears (seconds)",
+      "description": "Turns shorter than this never bring the feed up, unless Claude calls a tool first.",
+      "default": 8
+    },
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of the card and the status line. Auto follows the system.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "zh",
+        "en"
+      ]
+    }
+  },
+  "homepage": "https://github.com/Cookiezisg/Workn-t",
+  "repository": "https://github.com/Cookiezisg/Workn-t"
+}

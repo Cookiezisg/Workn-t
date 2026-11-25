@@ -1,0 +1,6 @@
+{
+  "name": "worknt",
+  "description": "Workn't: short videos in Claude's browser pane while Claude works, frozen the moment it is done.",
+  "owner": { "name": "Sun Weilin" },
+  "plugins": [{ "name": "worknt", "source": "./" }]
+}
