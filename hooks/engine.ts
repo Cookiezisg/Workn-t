@@ -115,6 +115,8 @@ export type Ctx = {
   tabsSeen: { at: number; tabs: readonly TabInfo[] } | null
   /** Whether the browser pane was showing when it last could be asked. */
   wasShown: boolean
+  /** The break now opening is on the tab kept from the last one, wherever the person has since taken it. */
+  isKeptTab: boolean
 }
 
 export const newCtx = (): Ctx => ({
@@ -155,6 +157,7 @@ export const newCtx = (): Ctx => ({
   bootTries: 0,
   tabsSeen: null,
   wasShown: true,
+  isKeptTab: false,
 })
 
 // ---- small things --------------------------------------------------------------
@@ -436,6 +439,7 @@ async function startSlack($: $, c: Ctx, isManual: boolean): Promise<void> {
     await closeTab($, kept.tabId)
   }
   await setLinger($, c, null, now)
+  c.isKeptTab = tabId !== null
   if (tabId === null) tabId = await openTab($, SITES[site].feedUrl)
   if (tabId === null) {
     c.hasFailed = true
@@ -579,6 +583,16 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
   if (slack.stage === 'opening') {
     if (!isTabAlive) return endSlack($, c, 'closed')
     if (page !== null && page.mode !== 'hold') page = (await syncPage($, c, slack, HOLD)) ?? page
+    if (page !== null && c.isKeptTab && page.health !== 'loading') {
+      // R-4: the kept tab was the person's to wander in. Asked for the feed again, they get the feed, not where they wandered to.
+      c.isKeptTab = false
+      if (page.health === 'elsewhere' || page.health === 'unknown') {
+        note(c.log, now, 'the kept tab was off the feed: taking it back there')
+        await navigate($, slack.tabId, SITES[slack.site].feedUrl)
+        await saveSlack($, c)
+        return
+      }
+    }
     if (page !== null && page.health !== 'loading') {
       if (!(await reveal($, c, slack, now))) return endSlack($, c, 'unusable')
     } else if (page === null && slack.silentSince > 0 && now - slack.silentSince > SILENT_MS) {
@@ -655,7 +669,7 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
     if (act.id === 'home') await navigate($, slack.tabId, SITES[slack.site].feedUrl) // W-5
     else if (act.id === 'skip') {
       const isPressed = await pressKey($, slack.tabId, 'ArrowDown')
-      note(c.log, now, `a live stream came up: pressed down (${isPressed ? 'ok' : 'refused'})`)
+      note(c.log, now, `a live stream came up (told by its ${act.arg ?? '?'}): pressed down (${isPressed ? 'ok' : 'refused'})`)
     }
     else if (act.id === 'set') await setFromPage($, c, act.arg)
   }

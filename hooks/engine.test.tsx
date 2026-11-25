@@ -65,7 +65,7 @@ function makeApp(on: On, options: Options = {}) {
     return m ? `${m[1]}${m[2]}` : url
   }
   const stats = () => ({
-    v: 23, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
+    v: 24, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
     framesOk: true, inputAgo: 0, videos: app.videos, watchMs: app.watchMs, live: false, cardId: app.want?.card?.id ?? null, more: false, idleAsk: false, acts: app.acts, lost: false, err: null, steps: 0, why: '',
   })
 
@@ -804,4 +804,22 @@ test('/worknt go: asks what is not yet chosen first, and says so when switched o
 
   await $.command.run({ command: 'worknt', args: 'off' } as never)
   expect((await $.command.run({ command: 'worknt', args: 'go' } as never)).text).toBe('Workn’t 关着。先运行 /worknt on。')
+})
+
+test('R-4: a kept tab the person wandered off the feed in is taken back to the feed when a break is asked for again', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  await (await world.band($)).press('give-up')
+  expect(world.browserCalls('navigate')).toHaveLength(1)
+
+  // Left alone with the kept page, the person clicked into a live room. Then: the way back in.
+  world.app.health = 'elsewhere'
+  await (await world.band($)).press('accept')
+  await world.clock.advance(1500)
+  expect(world.browserCalls('navigate')).toHaveLength(2)
+  expect(world.browserCalls('navigate')[1]?.args.url).toBe('https://www.tiktok.com/foryou')
+  expect(world.app.want?.mode).not.toBe('play')
+  world.app.health = 'feed'
+  await world.clock.advance(2500)
+  expect(world.app.want?.mode).toBe('play')
 })

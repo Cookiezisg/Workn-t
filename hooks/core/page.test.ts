@@ -761,13 +761,14 @@ test('S-7: a clip the browser will not start without a click gets a button that 
 test('live streams: asked to skip them, the page says so once it is sure, and never more than a few times in a row', () => {
   const { page, video } = feed()
   video.duration = Infinity
+  video.currentTime = 30
   page.cfg.skipLive = true
   page.sync(want('play'))
   expect(page.ask().live).toBe(true)
   page.run(500)
   expect(page.ask().acts).toEqual([])
   page.run(1000)
-  expect(page.ask().acts).toEqual([{ n: 1, id: 'skip' }])
+  expect(page.ask().acts).toEqual([{ n: 1, id: 'skip', arg: 'length' }])
   // The key did nothing: ask again, but not in a hurry, and give up after eight.
   page.run(1500)
   expect(page.ask().acts).toHaveLength(1)
@@ -782,6 +783,11 @@ test('live streams: a clip that comes after a skipped one starts the count again
   video.duration = Infinity
   page.cfg.skipLive = true
   page.sync(want('play'))
+  // No length yet, but it has only just begun: an ordinary clip looks the same in its first moments.
+  page.run(4000)
+  expect(page.ask().live).toBe(false)
+  expect(page.ask().acts).toEqual([])
+  video.currentTime = 30
   page.run(2000)
   expect(page.ask().acts).toHaveLength(1)
 
@@ -799,6 +805,7 @@ test('live streams: a clip that comes after a skipped one starts the count again
   video.readyState = 4
   page.run(2000)
   expect(page.ask().acts).toHaveLength(2)
+  expect(page.ask().acts[1]?.arg).toBe('length')
 })
 
 test('live streams: left alone unless asked, and Douyin\'s own marker for a live slide is enough', () => {
@@ -813,7 +820,7 @@ test('live streams: left alone unless asked, and Douyin\'s own marker for a live
   marked.cfg.skipLive = true
   marked.sync(want('play'))
   marked.run(2000)
-  expect(marked.ask().acts).toEqual([{ n: 1, id: 'skip' }])
+  expect(marked.ask().acts).toEqual([{ n: 1, id: 'skip', arg: 'mark' }])
   // One scrolled out of view is not the slide in view.
   const off = feed().page
   off.selectors['[data-e2e="feed-live"]'] = [{ getBoundingClientRect: () => ({ left: 0, top: 800, right: 400, bottom: 1600 }) }]

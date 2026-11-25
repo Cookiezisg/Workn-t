@@ -21,7 +21,7 @@ import type { PageStats, PageWant, SiteId } from './types'
  * is therefore decided here, not by a round trip to the mod.
  */
 
-export const PAGE_VERSION = 23
+export const PAGE_VERSION = 24
 
 export type PageConfig = {
   v: number
@@ -195,13 +195,17 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       return h >= win.innerHeight * 0.5
     }
 
-    /** The slide in view is a live stream, as far as the page can be sure. A clip still loading is not one. */
-    W.liveSlide = function (v: any): boolean {
+    /**
+     * Whether the slide in view is a live stream, and what says so: the site's own mark for one, or a video
+     * with no length. A clip can lack a length for its first moments too, so that alone counts only once it
+     * has played for a few seconds and still has none. Empty when it is an ordinary clip, or not yet known.
+     */
+    W.liveSlide = function (v: any): string {
       if (W.cfg.site === 'douyin') {
         var marks = W.all('[data-e2e="feed-live"]')
-        for (var i = 0; i < marks.length; i++) if (W.fills(marks[i])) return true
+        for (var i = 0; i < marks.length; i++) if (W.fills(marks[i])) return 'mark'
       }
-      return !!v && v.readyState > 0 && (v.duration === Infinity || v.duration > 1e9)
+      return v && v.readyState > 0 && (v.duration === Infinity || v.duration > 1e9) && v.currentTime > 3 ? 'length' : ''
     }
 
     /** A setting as it will be: the choice just made on the menu, until the mod's own word arrives. */
@@ -703,13 +707,14 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       if (!shouldPlay || (v && !v.paused)) W.blocked = false
 
       // A live stream in the feed, when the person has asked not to see them: say so, once per look, and let the mod press the key.
-      var isLiveNow = isFeed && W.liveSlide(v)
+      var liveBy = isFeed ? W.liveSlide(v) : ''
+      var isLiveNow = liveBy !== ''
       if (isLiveNow && shouldPlay && mode === 'play' && W.skipsLive()) {
         if (!W.liveSince) W.liveSince = t
         else if (t - W.liveSince >= 1000 && t - W.skipAt >= 2500 && W.skips < 8) {
           W.skipAt = t
           W.skips += 1
-          W.act('skip')
+          W.act('skip', liveBy)
         }
       } else {
         W.liveSince = 0
@@ -870,7 +875,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         inputAgo: Math.max(0, now() - W.lastInput),
         videos: W.videos,
         watchMs: W.watchMs,
-        live: W.health === 'feed' && W.liveSlide(v),
+        live: W.health === 'feed' && W.liveSlide(v) !== '',
         cardId: W.want.card ? W.want.card.id : null,
         more: !!W.more,
         idleAsk: W.idleAsk,

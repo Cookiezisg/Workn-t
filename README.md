@@ -90,7 +90,9 @@ Three ways in, one set of settings, applied to every session at once. No restart
 - The sites change. The mod recognises the feed by page structure; when it no longer does, it shows the site as it is and says so, rather than a broken layout.
 - A site can sign you out on its own (it happened during testing). You are shown the site's own sign-in, and the feed starts by itself afterwards.
 - Jumping from the card to another session is not possible; the card names the session.
-- Skipping live streams has not been tried on a real live stream yet. If one is not recognised, nothing happens and it plays like any clip.
+- Skipping live streams: in a real run the mod took two slides for live streams and moved past them, but nobody has checked by eye that they were. If one is not recognised, nothing happens and it plays like any clip.
+- The settings pane takes the browser pane's place while it is open, so the video pauses until you switch back.
+- A browser pane opened by a local dev-server preview keeps its own sign-ins, apart from the shared ones. In such a pane the site shows as signed out.
 - The tally covers today and yesterday.
 - Tested on macOS only.
 
@@ -201,7 +203,9 @@ Shared 意味着所有会话的浏览器都带着你的登录。Workn't 开着�
 - 网站会改版。mod 靠页面结构认出推荐流；认不出时会原样显示网站并告诉你，而不是给你一个坏掉的布局。
 - 网站可能单方面让你的登录失效（测试中发生过）。这时显示的是网站自己的登录界面，登录后自动开始。
 - 没法从卡片直接跳到另一个会话，卡片上会写明是哪个。
-- “直播划走”还没在真的直播上试过。认不出来的时候什么都不会发生，直播像普通视频一样播。
+- “直播划走”：实跑中 mod 两次把推荐流里的某一条认成直播并划走了，但没有人眼确认过那两条确实是直播。认不出来的时候什么都不会发生，直播像普通视频一样播。
+- 设置面板打开时占着浏览器面板的位置，视频会暂停，切回去就继续。
+- 由本地开发预览打开的浏览器面板有自己单独的一套登录，和共享的那套不通。在这样的面板里网站显示为未登录。
 - 账单只有今天和昨天。
 - 只在 macOS 上测试过。
 
