@@ -75,7 +75,8 @@ Three ways in, one set of settings, applied to every session at once. No restart
 
 ### Privacy
 
-- **Claude is kept off the video sites.** While Workn't is on, the model cannot navigate to Douyin or TikTok, and cannot read or control any tab that is on them, whoever opened it. Calls hidden in a batch are checked one by one. Tab titles and addresses on those sites are blanked from what the model is shown. If the guard itself breaks, browser calls are refused, not let through.
+- **Claude is kept off the video sites.** While Workn't is on, the model's browser calls are refused if they name Douyin or TikTok or aim at a tab that is on them, whoever opened it. Every call is looked at again after it has run: if it ended on one of those sites by a road it did not name (a redirect, a script, a batch that navigates and then reads), its result is withheld. Tab titles and addresses on those sites are blanked from what the model is shown. If the guard itself breaks, browser calls are refused, not let through.
+- **It is a railing, not a vault.** The guard stops Claude from wandering onto your video site, or being led there by a web page. It is not a security boundary: a model that can run commands could in principle change Workn't's own settings file, as it could read any file on your disk. Real isolation is what Claude's own permission settings are for.
 - **Stored on your machine only:** your settings, per-day totals (how long Claude worked, how long you watched, how many clips), and a log of state changes and errors. Never what you watched. Never anything about your account.
 - **Nothing is sent anywhere.**
 - **It does not click for you.** No consent boxes, no dialogs, nothing on the site. One exception, and only if you turn it on: with live streams set to skip, it presses ↓ to move past one.
@@ -188,7 +189,8 @@ Shared 意味着所有会话的浏览器都带着你的登录。Workn't 开着�
 
 ### 隐私
 
-- **Claude 碰不到视频网站。** Workn't 开着时，模型不能导航到抖音或 TikTok，也不能读取或操作任何处在这两个网站上的标签页，不管是谁打开的。藏在批量操作里的调用逐个检查。给模型看的内容里，这些标签页的标题和地址会被抹掉。守卫自己出故障时，浏览器操作一律拒绝，不放行。
+- **Claude 碰不到视频网站。** Workn't 开着时，模型的浏览器操作只要提到抖音或 TikTok、或者对准了处在这两个网站上的标签页，就被拒绝，不管那个标签页是谁打开的。每一步执行完还会再看一次：如果它经由没说出口的路（跳转、脚本、先跳转再读取的批量操作）落到了这些网站上，结果不交给模型。给模型看的内容里，这些标签页的标题和地址会被抹掉。守卫自己出故障时，浏览器操作一律拒绝，不放行。
+- **这是一道栏杆，不是保险柜。** 守卫防的是 Claude 顺手走到、或者被网页内容带到你的视频网站上。它不是安全边界：能运行命令的模型原则上可以改掉 Workn't 自己的设置文件，就像它可以读你磁盘上的任何文件。真正的隔离靠 Claude 自己的权限设置。
 - **只存在你电脑上的：** 你的设置、每天的合计（Claude 干了多久、你看了多久、几条）、状态变化和错误的日志。不存你看了什么，不存任何账号信息。
 - **不向任何地方发送任何东西。**
 - **不替你点任何东西。** 同意框、弹窗、网站上的任何按钮都不点。只有一个例外，而且要你自己打开：直播设成“划走”之后，它会替你按 ↓ 把直播划过去。

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.2.2 (not released)
+
+A full check of 0.2.1: four independent reviews, random-order tests with failing outside calls, and deliberately broken code to see what the tests miss. Everything below was found that way, and each has a test now.
+
+**You would have run into these**
+
+- After pressing `Back to the feed` once, the next press on the page (for example `Back to work` on the card) did nothing.
+- `/worknt go` typed while Claude was working waited for the turn to end.
+- With sound off, clips after the first could play aloud.
+- A paused clip started again when the site started a neighbouring one; after a swipe the next clip could stay frozen.
+- "One more" ran on for minutes with the site's auto-advance on, or came back at once after a swipe.
+- Coming back after more than five minutes away got "Still there?" straight away.
+- Off the feed (a profile, a live room) nothing called you back, and the line had no `Back to work`.
+- The first-use questions stayed on the line for ever if the turn ended first.
+- After `/worknt reset`, the next thing counted brought the old tally back.
+
+**Tabs and sessions**
+
+- A break taken by another session while still loading did not let go.
+- The person's own tab could be used as the video page when a new one could not be made, and later closed.
+- Tabs that were never shown, taken over, or unusable were left open; a kept tab could be forgotten instead of closed.
+- A mod reloaded mid-turn forgot the turn was running.
+- A wait that ended at once left the session "waiting"; a permission request was ended by any other call of the same tool.
+
+**The guard**
+
+- A browser call is looked at again after it runs. One that ends on a video site by a redirect, a script, or a batch that navigates and then reads no longer gets its result.
+- Addresses are read the way the browser reads them (percent-escapes, full-width letters, and so on).
+- Every shape of tool answer is scrubbed, not only lists of text.
+- The guard stays on while the mod is asleep in a session.
+- A call with no tab named, while the video is in front, now tells the model to open its own tab instead of asking the person to switch Workn't off.
+- The README now says plainly what the guard is not: a security boundary.
+
 ## 0.2.1 (2026-11-26)
 
 - `Leave me alone`. After `One more` and `Last one, really`, the third time the card comes back its button no longer asks for one more clip: it sends the card away for the rest of that round. Clips play on, nothing locks, and the break is not ended for nobody working. The next thing to happen (another turn finishing, a session waiting on you) is a new card and calls you back as before.
