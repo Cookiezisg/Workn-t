@@ -193,3 +193,8 @@ export async function giveFocus($: $, tabId: string): Promise<boolean> {
   hasFocus = after?.hasFocus === true
   return hasFocus
 }
+
+/** Presses one key in the tab, as a keyboard would: the sites move their feed on nothing less. */
+export async function pressKey($: $, tabId: string, key: string): Promise<boolean> {
+  return (await call($, BROWSER, 'computer', { action: 'key', text: key, tabId, action_summary: 'Moves the feed to the next clip' })).isOk
+}

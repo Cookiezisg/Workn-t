@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { PAGE_VERSION, pageMain, statsScript, syncScript } from './page'
-import type { PageConfig } from './page'
+import type { PageConfig, PageMenu } from './page'
 import { SITES } from './sites'
 import type { Card, PageStats, PageWant, SiteId } from './types'
 
@@ -91,7 +91,10 @@ function makePage(site: SiteId) {
 
   const cfg: PageConfig = {
     v: PAGE_VERSION, site, css: SITES[site].css, isDark: null, isMuted: false, idleMs: 5 * 60_000,
-    copy: { stillThere: '还在吗？', stay: '在', back: '回去看看', lost: 'Workn’t 断开了。' },
+    skipLive: false,
+    copy: { stillThere: '还在吗？', stay: '在', back: '回去看看', lost: 'Workn’t 断开了。', tapToPlay: '点一下开始' },
+    // Most tests are about what the page does unasked, so they run without the menu; the menu's own tests put it in.
+    menu: null,
   }
 
   const feedUrl = site === 'douyin' ? 'https://www.douyin.com/?recommend=1' : 'https://www.tiktok.com/foryou'
@@ -150,10 +153,19 @@ function makePage(site: SiteId) {
     },
     media(type: string): void { for (const fn of [...(docListeners[type] ?? [])]) fn({ type }) },
     touch(): void { for (const fn of [...(winListeners.pointerdown ?? [])]) fn({ type: 'pointerdown', composedPath: () => [] }) },
+    move(): void { for (const fn of [...(winListeners.mousemove ?? [])]) fn({ type: 'mousemove', composedPath: () => [] }) },
     counts: () => ({ intervalsCleared, fullscreenExits, winListeners: Object.values(winListeners).flat().length, docListeners: Object.values(docListeners).flat().length }),
     state: (): any => win.__worknt,
   }
 }
+
+const menuOf = (sound: 'on' | 'off', live: 'show' | 'skip'): PageMenu => ({
+  rows: [
+    { id: 'sound', label: '声音', value: sound, options: [{ value: 'on', label: '有声' }, { value: 'off', label: '静音' }] },
+    { id: 'live', label: '直播', value: live, options: [{ value: 'show', label: '照常' }, { value: 'skip', label: '划走' }] },
+  ],
+  back: '回去看看',
+})
 
 const want = (mode: PageWant['mode'], patch: Partial<PageWant> = {}): PageWant => ({ mode, hold: false, card: null, note: null, toast: null, ...patch })
 
@@ -603,4 +615,192 @@ test('a newer page library replaces an older one cleanly', () => {
   expect(page.hasHost()).toBe(false)
   expect(video.paused).toBe(false)
   expect(page.key('keydown', 'ArrowDown').wasStopped).toBe(false)
+})
+
+// ---- a page kept from one break to the next (R-3) -------------------------------------
+
+test('R-3, W-10: a new break on a kept page starts its counts over and carries no button press across', () => {
+  const { page } = feed()
+  page.sync(want('play'))
+  page.run(3000)
+  const first = page.sync(want('card', { card: CARD }))
+  expect(first.videos).toBe(1)
+  page.press('回去看看')
+  expect(page.ask().acts).toEqual([{ n: 1, id: 'back' }])
+  page.sync(want('rest'))
+
+  page.skip(60_000)
+  const again = page.sync(want('hold', { hold: true }))
+  expect(again.videos).toBe(0)
+  expect(again.watchMs).toBe(0)
+  expect(again.acts).toEqual([])
+  expect(again.load).not.toBe(first.load)
+  // The same clip, watched again in the new break, counts in the new break.
+  page.sync(want('play'))
+  page.run(3000)
+  expect(page.ask().videos).toBe(1)
+})
+
+// ---- T-1: the menu on the video page ---------------------------------------------------
+
+test('T-1: the menu button shows as a clip starts, steps aside, and comes back when the pointer moves', () => {
+  const { page } = feed()
+  page.cfg.menu = menuOf('on', 'show')
+  page.sync(want('play'))
+  expect(page.drawn()).toEqual(['⋯'])
+  page.run(5000)
+  expect(page.hasHost()).toBe(false)
+  page.move()
+  expect(page.drawn()).toEqual(['⋯'])
+  page.run(3000)
+  expect(page.hasHost()).toBe(false)
+})
+
+test('T-1: a choice on the menu takes effect at once, is reported for the mod to keep, and locks nothing', () => {
+  const { page, video } = feed()
+  page.cfg.menu = menuOf('on', 'show')
+  page.sync(want('play'))
+  page.press('⋯')
+  expect(page.drawn()).toEqual(['⋯', '声音', '有声', '静音', '直播', '照常', '划走', '回去看看'])
+  expect(video.paused).toBe(false)
+  expect(page.key('keydown', 'ArrowDown').wasStopped).toBe(false)
+
+  page.press('静音')
+  page.run(500)
+  expect(video.muted).toBe(true)
+  expect(page.ask().acts).toEqual([{ n: 1, id: 'set', arg: 'sound off' }])
+  // Pressing what is already chosen is not a change.
+  page.press('静音')
+  expect(page.ask().acts).toHaveLength(1)
+
+  page.press('有声')
+  expect(video.muted).toBe(false)
+  expect(page.ask().acts.map(act => act.arg)).toEqual(['sound off', 'sound on'])
+  // The menu stays up through all of it, well past the time its button alone would have stepped aside.
+  page.run(6000)
+  expect(page.drawn()).toContain('回去看看')
+})
+
+test('T-1: the menu\'s last button goes back to work; a card takes the menu down', () => {
+  const { page } = feed()
+  page.cfg.menu = menuOf('on', 'show')
+  page.sync(want('play'))
+  page.press('⋯')
+  page.press('回去看看')
+  expect(page.ask().acts).toEqual([{ n: 1, id: 'back' }])
+
+  page.press('⋯')
+  page.sync(want('card', { card: CARD }))
+  expect(page.drawn()).not.toContain('声音')
+  expect(page.drawn()).toContain('Claude 跑完了')
+})
+
+test('T-1, S-6: the sound setting changed elsewhere reaches a clip already playing', () => {
+  const { page, video } = feed()
+  const set = (sound: 'on' | 'off'): void => {
+    page.cfg.isMuted = sound === 'off'
+    page.cfg.menu = menuOf(sound, 'show')
+    page.sync(want('play'))
+  }
+  set('off')
+  expect(video.muted).toBe(true)
+  set('on')
+  expect(video.muted).toBe(false)
+  page.run(1000)
+  expect(video.muted).toBe(false)
+  set('off')
+  page.run(500)
+  expect(video.muted).toBe(true)
+})
+
+// ---- S-7 -----------------------------------------------------------------------------------
+
+test('S-7: a clip the browser will not start without a click gets a button that says so, and one click starts it', async () => {
+  const { page, video } = feed()
+  let isAllowed = false
+  video.play = () => {
+    if (isAllowed) {
+      video.paused = false
+      return undefined
+    }
+    return Promise.reject({ name: 'NotAllowedError' }) as never
+  }
+  page.sync(want('play'))
+  await Promise.resolve()
+  page.run(500)
+  expect(page.drawn()).toEqual(['点一下开始'])
+  expect(video.paused).toBe(true)
+
+  isAllowed = true
+  page.press('点一下开始')
+  expect(video.paused).toBe(false)
+  page.run(500)
+  expect(page.hasHost()).toBe(false)
+})
+
+// ---- live streams in the feed ---------------------------------------------------------------
+
+test('live streams: asked to skip them, the page says so once it is sure, and never more than a few times in a row', () => {
+  const { page, video } = feed()
+  video.duration = Infinity
+  page.cfg.skipLive = true
+  page.sync(want('play'))
+  expect(page.ask().live).toBe(true)
+  page.run(500)
+  expect(page.ask().acts).toEqual([])
+  page.run(1000)
+  expect(page.ask().acts).toEqual([{ n: 1, id: 'skip' }])
+  // The key did nothing: ask again, but not in a hurry, and give up after eight.
+  page.run(1500)
+  expect(page.ask().acts).toHaveLength(1)
+  page.run(1000)
+  expect(page.ask().acts).toHaveLength(2)
+  page.run(60_000)
+  expect(page.ask().acts).toHaveLength(8)
+})
+
+test('live streams: a clip that comes after a skipped one starts the count again; a clip still loading is not taken for live', () => {
+  const { page, video } = feed()
+  video.duration = Infinity
+  page.cfg.skipLive = true
+  page.sync(want('play'))
+  page.run(2000)
+  expect(page.ask().acts).toHaveLength(1)
+
+  video.duration = 15
+  page.run(6000)
+  expect(page.ask().live).toBe(false)
+  expect(page.ask().acts).toHaveLength(1)
+
+  video.duration = NaN
+  video.readyState = 0
+  page.run(6000)
+  expect(page.ask().acts).toHaveLength(1)
+
+  video.duration = Infinity
+  video.readyState = 4
+  page.run(2000)
+  expect(page.ask().acts).toHaveLength(2)
+})
+
+test('live streams: left alone unless asked, and Douyin\'s own marker for a live slide is enough', () => {
+  const { page, video } = feed()
+  video.duration = Infinity
+  page.sync(want('play'))
+  page.run(10_000)
+  expect(page.ask().acts).toEqual([])
+
+  const marked = feed().page
+  marked.selectors['[data-e2e="feed-live"]'] = [{ getBoundingClientRect: () => ({ left: 0, top: 0, right: 400, bottom: 800 }) }]
+  marked.cfg.skipLive = true
+  marked.sync(want('play'))
+  marked.run(2000)
+  expect(marked.ask().acts).toEqual([{ n: 1, id: 'skip' }])
+  // One scrolled out of view is not the slide in view.
+  const off = feed().page
+  off.selectors['[data-e2e="feed-live"]'] = [{ getBoundingClientRect: () => ({ left: 0, top: 800, right: 400, bottom: 1600 }) }]
+  off.cfg.skipLive = true
+  off.sync(want('play'))
+  off.run(5000)
+  expect(off.ask().acts).toEqual([])
 })

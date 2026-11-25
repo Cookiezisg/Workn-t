@@ -14,7 +14,7 @@ const rep = (id: string, patch: Partial<Report> = {}): Report => ({ ...newReport
 
 const page = (patch: Partial<PageStats> = {}): PageStats => ({
   v: 1, load: 1, mode: 'play', health: 'feed', url: 'https://www.douyin.com/?recommend=1', playing: true, framesOk: true,
-  inputAgo: 0, videos: 0, watchMs: 0, cardId: null, more: false, idleAsk: false, acts: [], lost: false, ...patch,
+  inputAgo: 0, videos: 0, watchMs: 0, live: false, cardId: null, more: false, idleAsk: false, acts: [], lost: false, ...patch,
 })
 
 const slack = (patch: Partial<Slack> = {}): Slack => ({
@@ -204,7 +204,7 @@ test('C-9: "one more" is not "back": the break goes on', () => {
 
 const guest = (patch: Partial<GuestWorld> = {}): GuestWorld => {
   const me = rep('a', { status: 'working', since: NOW - 9000 })
-  return { now: NOW, me, reports: [me], titles: {}, settings: DEFAULT_SETTINGS, today: '2026-01-05', hasDeclined: false, ...patch }
+  return { now: NOW, me, reports: [me], titles: {}, settings: DEFAULT_SETTINGS, today: '2026-01-05', hasDeclined: false, hasLeft: false, canResume: false, ...patch }
 }
 
 test('I-1: the invitation shows once a typed turn has run for the set time, by the clock alone', () => {
@@ -225,6 +225,15 @@ test('I-2: no invitation when declined this turn, silenced for today, in an excl
   expect(decideGuest(guest({ settings: { ...DEFAULT_SETTINGS, quietDay: '2026-01-04' } })).kind).toBe('invite')
   expect(decideGuest(guest({ settings: { ...DEFAULT_SETTINGS, excluded: ['/proj/a'] } })).kind).toBe('none')
   expect(decideGuest(guest({ settings: { ...DEFAULT_SETTINGS, isEnabled: false } })).kind).toBe('none')
+})
+
+test('I-2, R-3: having left a break this turn, the person is not invited again; the kept page is offered, by a turn they typed only', () => {
+  expect(decideGuest(guest({ hasLeft: true, canResume: true }))).toEqual({ kind: 'resume' })
+  expect(decideGuest(guest({ hasLeft: true, canResume: false })).kind).toBe('none')
+  // The offer does not wait out the delay, nor mind today's silence: the person opened this door themselves.
+  expect(decideGuest(guest({ hasLeft: true, canResume: true, me: rep('a', { status: 'working', since: NOW - 500 }), settings: { ...DEFAULT_SETTINGS, quietDay: '2026-01-05' } })).kind).toBe('resume')
+  expect(decideGuest(guest({ hasLeft: true, canResume: true, me: rep('a', { status: 'done', since: NOW - 500 }) })).kind).toBe('none')
+  expect(decideGuest(guest({ hasLeft: true, canResume: true, settings: { ...DEFAULT_SETTINGS, isEnabled: false } })).kind).toBe('none')
 })
 
 test('I-5, W-8: with the video up in another session there is no second invitation, only an offer to bring it over once it is out of sight', () => {

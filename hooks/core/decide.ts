@@ -197,6 +197,10 @@ export type GuestWorld = {
   today: string
   /** The person said no to the invitation in the turn now running (I-6). */
   hasDeclined: boolean
+  /** The person ended a break in the turn now running. */
+  hasLeft: boolean
+  /** That break was on screen, and its tab is still kept (R-3). */
+  canResume: boolean
 }
 
 /** What a session that does not hold the video page shows above its prompt (section 4, W-8). */
@@ -212,6 +216,8 @@ export function decideGuest(w: GuestWorld): BandView {
   }
 
   if (w.me.status !== 'working') return { kind: 'none' }
+  // Whoever just walked out is not asked back in. The line says what is true, that the page is still there, and offers the way in.
+  if (w.hasLeft) return w.canResume ? { kind: 'resume' } : { kind: 'none' }
   if (w.now - w.me.since < w.settings.delaySec * 1000) return { kind: 'none' }
   if (w.hasDeclined) return { kind: 'none' }
   if (w.settings.quietDay === w.today) return { kind: 'none' }

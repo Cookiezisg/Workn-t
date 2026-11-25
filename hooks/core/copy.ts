@@ -36,6 +36,8 @@ export type Copy = {
   slack: (watchMs: number, videos: number) => string
   elsewhere: (title: string | null) => string
   moveHere: string
+  resume: (site: string) => string
+  resumeYes: string
   dormant: (reason: string) => string
   // Cards
   doneOne: string
@@ -62,8 +64,28 @@ export type Copy = {
   unknownNote: (site: string) => string
   doneToast: (title: string) => string
   failedToast: (title: string) => string
-  focusHint: string
   lost: string
+  tapToPlay: string
+  // The menu on the video page, and the settings pane
+  live: string
+  liveShow: string
+  liveSkip: string
+  paneSwitch: string
+  paneOn: string
+  paneOff: string
+  paneSite: string
+  paneLang: string
+  paneDelay: string
+  paneIdle: string
+  seconds: (n: number) => string
+  minutes: (n: number) => string
+  paneQuiet: string
+  paneHere: string
+  paneHereOn: string
+  paneHereOff: string
+  paneHint: string
+  paneDoctor: string
+  paneNotChosen: string
   // Guard
   offLimits: string
   guardFailed: string
@@ -74,6 +96,7 @@ export type Copy = {
   siteSet: (site: string) => string
   soundSet: (isOn: boolean) => string
   langSet: string
+  liveSet: (isSkipped: boolean) => string
   delaySet: (seconds: number) => string
   idleSet: (min: number) => string
   quietOn: string
@@ -81,7 +104,7 @@ export type Copy = {
   excluded: string
   included: string
   resetDone: string
-  status: (isEnabled: boolean, site: string | null, sound: string | null, delay: number, idle: number) => string
+  status: (isEnabled: boolean, site: string | null, sound: string | null, live: string, delay: number, idle: number) => string
   usage: string
   bill: (label: string, agentMs: number, watchMs: number, videos: number) => string
   today: string
@@ -114,6 +137,8 @@ export const COPY: Record<Lang, Copy> = {
     slack: (watchMs, videos) => `摸鱼中 ${clock(watchMs)} · ${videos} 条`,
     elsewhere: title => (title ? `视频开在「${title}」里` : '视频开在另一个会话里'),
     moveHere: '搬过来',
+    resume: site => `${site}还开着`,
+    resumeYes: '接着刷',
     dormant: reason => `Workn’t 没在运行：${reason}`,
     doneOne: 'Claude 跑完了',
     doneOneLine: ms => `用时 ${clock(ms)}`,
@@ -143,8 +168,27 @@ export const COPY: Record<Lang, Copy> = {
     unknownNote: site => `${site}改版了，先这样看。`,
     doneToast: title => `「${title}」跑完了`,
     failedToast: title => `「${title}」出错停下了`,
-    focusHint: '点一下视频区域，就能用方向键。',
     lost: 'Workn’t 断开了。',
+    tapToPlay: '点一下开始',
+    live: '直播',
+    liveShow: '照常',
+    liveSkip: '划走',
+    paneSwitch: 'Workn’t',
+    paneOn: '开',
+    paneOff: '关',
+    paneSite: '看哪个',
+    paneLang: '语言',
+    paneDelay: 'Claude 干多久后问',
+    paneIdle: '多久没动算走开',
+    seconds: n => `${n} 秒`,
+    minutes: n => `${n} 分钟`,
+    paneQuiet: '今天别问',
+    paneHere: '在这个项目里',
+    paneHereOn: '出现',
+    paneHereOff: '不出现',
+    paneHint: '改动对所有会话立刻生效。关掉 Workn’t 后，模型可以访问视频网站。',
+    paneDoctor: '自查',
+    paneNotChosen: '还没选',
     offLimits:
       '这个网站是用户自己刷视频用的，开着 Workn’t 时模型不能打开、读取或操作它。如果用户确实要你处理这个网站上的内容，请告诉用户先运行 /worknt off。',
     guardFailed: 'Workn’t 的守卫出错了，为保险起见拒绝了这次浏览器操作。运行 /worknt doctor 可以查看原因。',
@@ -154,17 +198,18 @@ export const COPY: Record<Lang, Copy> = {
     siteSet: site => `改成${site}了。`,
     soundSet: isOn => (isOn ? '有声。' : '静音。'),
     langSet: '已改成中文。',
+    liveSet: isSkipped => (isSkipped ? '推荐流里的直播会自动划走。' : '直播照常显示。'),
     delaySet: seconds => `Claude 干活 ${seconds} 秒后再问。`,
     idleSet: min => `${min} 分钟没动算走开。`,
     quietOn: '今天不再问了，明天恢复。',
     quietOff: '恢复询问。',
     excluded: '在这个项目里不再出现。',
     included: '在这个项目里恢复出现。',
-    resetDone: '已清空设置和记录。',
-    status: (isEnabled, site, sound, delay, idle) =>
-      `${isEnabled ? '开着' : '关着'} · ${site ?? '还没选片源'} · ${sound ?? '还没选声音'} · ${delay} 秒后询问 · ${idle} 分钟没动算走开`,
+    resetDone: '已清空设置、记录和日志。',
+    status: (isEnabled, site, sound, live, delay, idle) =>
+      `${isEnabled ? '开着' : '关着'} · ${site ?? '还没选片源'} · ${sound ?? '还没选声音'} · 直播${live} · ${delay} 秒后询问 · ${idle} 分钟没动算走开`,
     usage:
-      '/worknt on | off · douyin | tiktok · sound on | off · lang zh | en · delay <秒> · idle <分钟> · quiet | quiet off · here off | here on · bill · doctor · reset',
+      '/worknt on | off · douyin | tiktok · sound on | off · live show | skip · lang zh | en · delay <秒> · idle <分钟> · quiet | quiet off · here off | here on · bill · doctor · reset',
     bill: (label, agentMs, watchMs, videos) => `${label}：Claude 干了 ${minutes(agentMs)} 分钟，你刷了 ${videos} 条，${minutes(watchMs)} 分钟。`,
     today: '今天',
     yesterday: '昨天',
@@ -193,6 +238,8 @@ export const COPY: Record<Lang, Copy> = {
     slack: (watchMs, videos) => `On a break ${clock(watchMs)} · ${videos} ${videos === 1 ? 'clip' : 'clips'}`,
     elsewhere: title => (title ? `The video is in “${title}”` : 'The video is in another session'),
     moveHere: 'Bring it here',
+    resume: site => `${site} is still open`,
+    resumeYes: 'Resume',
     dormant: reason => `Workn’t is not running: ${reason}`,
     doneOne: 'Claude is done',
     doneOneLine: ms => `Took ${clock(ms)}`,
@@ -222,8 +269,27 @@ export const COPY: Record<Lang, Copy> = {
     unknownNote: site => `${site} changed its layout. Showing it as it is.`,
     doneToast: title => `“${title}” is done`,
     failedToast: title => `“${title}” stopped on an error`,
-    focusHint: 'Click the video once to use the arrow keys.',
     lost: 'Workn’t lost contact.',
+    tapToPlay: 'Click to start',
+    live: 'Live streams',
+    liveShow: 'Show',
+    liveSkip: 'Skip',
+    paneSwitch: 'Workn’t',
+    paneOn: 'On',
+    paneOff: 'Off',
+    paneSite: 'Source',
+    paneLang: 'Language',
+    paneDelay: 'Ask after Claude has worked for',
+    paneIdle: 'Count me as gone after',
+    seconds: n => `${n} s`,
+    minutes: n => `${n} min`,
+    paneQuiet: 'Stop asking for today',
+    paneHere: 'In this project',
+    paneHereOn: 'Show up',
+    paneHereOff: 'Stay away',
+    paneHint: 'Changes apply to every session at once. While Workn’t is off, the model can reach the video sites.',
+    paneDoctor: 'Self-check',
+    paneNotChosen: 'not chosen yet',
     offLimits:
       'This site is where the user watches videos. While Workn’t is on, the model may not open, read or control it. If the user really wants you to work on this site, tell them to run /worknt off first.',
     guardFailed: 'Workn’t’s guard failed, so this browser call was refused to be safe. /worknt doctor shows why.',
@@ -233,17 +299,18 @@ export const COPY: Record<Lang, Copy> = {
     siteSet: site => `Switched to ${site}.`,
     soundSet: isOn => (isOn ? 'Sound on.' : 'Muted.'),
     langSet: 'Switched to English.',
+    liveSet: isSkipped => (isSkipped ? 'Live streams in the feed are skipped.' : 'Live streams are shown.'),
     delaySet: seconds => `It asks after Claude has worked for ${seconds}s.`,
     idleSet: min => `${min} min without input counts as gone.`,
     quietOn: 'No more asking today. Back tomorrow.',
     quietOff: 'Asking again.',
     excluded: 'It will not show up in this project.',
     included: 'It shows up in this project again.',
-    resetDone: 'Settings and records cleared.',
-    status: (isEnabled, site, sound, delay, idle) =>
-      `${isEnabled ? 'On' : 'Off'} · ${site ?? 'no source chosen yet'} · ${sound ?? 'sound not chosen yet'} · asks after ${delay}s · gone after ${idle} min idle`,
+    resetDone: 'Settings, records and logs cleared.',
+    status: (isEnabled, site, sound, live, delay, idle) =>
+      `${isEnabled ? 'On' : 'Off'} · ${site ?? 'no source chosen yet'} · ${sound ?? 'sound not chosen yet'} · live streams: ${live} · asks after ${delay}s · gone after ${idle} min idle`,
     usage:
-      '/worknt on | off · douyin | tiktok · sound on | off · lang zh | en · delay <seconds> · idle <minutes> · quiet | quiet off · here off | here on · bill · doctor · reset',
+      '/worknt on | off · douyin | tiktok · sound on | off · live show | skip · lang zh | en · delay <seconds> · idle <minutes> · quiet | quiet off · here off | here on · bill · doctor · reset',
     bill: (label, agentMs, watchMs, videos) =>
       `${label}: Claude worked ${minutes(agentMs)} min. You watched ${videos} ${videos === 1 ? 'clip' : 'clips'}, ${minutes(watchMs)} min.`,
     today: 'Today',

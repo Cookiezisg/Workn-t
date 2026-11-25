@@ -50,6 +50,8 @@ export type BandView =
   | { kind: 'none' }
   | { kind: 'welcome' }
   | { kind: 'invite' }
+  /** The person left a break in the turn still running, and its tab is still kept: the way back in. */
+  | { kind: 'resume' }
   | { kind: 'quiet-ask' }
   | { kind: 'setup'; step: 'lang' | 'site' | 'sound' }
   | { kind: 'opening'; isSlow: boolean }
@@ -64,6 +66,26 @@ export type Linger = { tabId: string; site: SiteId; until: number }
 /** What the line above the prompt reads: the view, and what it needs to word it. */
 export type Band = { view: BandView; lang: Lang; site: SiteId | null }
 
+export type DayTotal = { agentMs: number; watchMs: number; videos: number }
+
+/** What the settings pane shows (T-1): the settings as they stand, the tally, and the self-report when asked for. */
+export type Panel = {
+  lang: Lang
+  /** Why the mod is asleep in this session; null when it is awake. */
+  dormant: string | null
+  isEnabled: boolean
+  site: SiteId | null
+  sound: 'on' | 'off' | null
+  live: 'show' | 'skip'
+  delaySec: number
+  idleMin: number
+  isQuietToday: boolean
+  isExcludedHere: boolean
+  today: DayTotal
+  yesterday: DayTotal
+  doctor: string | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     worknt: {
@@ -72,6 +94,7 @@ declare module 'claude-code' {
       slack: Shaped<Slack | null>
       /** Kept here for the same reason: a reloaded mod must not forget a tab it owes a closing. */
       linger: Shaped<Linger | null>
+      panel: Shaped<Panel>
     }
   }
 }

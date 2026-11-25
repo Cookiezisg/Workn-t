@@ -43,12 +43,15 @@ function makeApp(on: On, options: Options = {}) {
     /** What the mod last asked the page to be. */
     want: null as PageWant | null,
     hasLibrary: false,
-    acts: [] as { n: number; id: string }[],
+    acts: [] as { n: number; id: string; arg?: string }[],
     /** Stands in for a tool of the model's that takes its time, such as a question to the person. */
     slowTool: null as ((name: string) => Promise<void>) | null,
     isModelListing: false,
     videos: 0,
     watchMs: 0,
+    /** Changes when the page starts over: a reload, or a new break on a kept page. */
+    load: 1,
+    paneOpens: 0,
     nextTab: 1,
   }
   if (options.settings) files.set(`${ROOT}/settings.json`, { text: JSON.stringify(options.settings), mtimeMs: NOW - 1000 })
@@ -62,8 +65,8 @@ function makeApp(on: On, options: Options = {}) {
     return m ? `${m[1]}${m[2]}` : url
   }
   const stats = () => ({
-    v: 21, load: 1, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
-    framesOk: true, inputAgo: 0, videos: app.videos, watchMs: app.watchMs, cardId: app.want?.card?.id ?? null, more: false, idleAsk: false, acts: app.acts, lost: false,
+    v: 22, load: app.load, mode: app.want?.mode ?? 'rest', health: app.health, url: 'https://www.tiktok.com/foryou', playing: app.want?.mode === 'play',
+    framesOk: true, inputAgo: 0, videos: app.videos, watchMs: app.watchMs, live: false, cardId: app.want?.card?.id ?? null, more: false, idleAsk: false, acts: app.acts, lost: false,
   })
 
   on('env.get', () => ({ value: HOME }))
@@ -72,6 +75,10 @@ function makeApp(on: On, options: Options = {}) {
   on('session.version', () => ({ value: '2.1.330' }) as never)
   on('settings.read', () => ({ value: { theme: 'auto' } }))
   on('command.register', () => ({ value: { command: 'worknt' } }))
+  on('ui.open', () => {
+    app.paneOpens += 1
+    return { value: { isPlaced: true } }
+  })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.end', () => ({ sessionId: 'sess-a' }))
   on('prompt.submit', (_, e) => ({ text: e.text }))
@@ -157,7 +164,16 @@ function makeApp(on: On, options: Options = {}) {
         // The sync script ends with its two arguments as JSON: the configuration, then the command.
         const at = script.lastIndexOf(', {"want":')
         const command = JSON.parse(script.slice(at + 2, -1)) as { want: PageWant | null; ack: number }
-        if (command.want) app.want = command.want
+        if (command.want) {
+          // As the real page does: a new break on a page at rest carries nothing over.
+          if (app.hasLibrary && app.want?.mode === 'rest' && command.want.mode !== 'rest') {
+            app.load += 1
+            app.videos = 0
+            app.watchMs = 0
+            app.acts = []
+          }
+          app.want = command.want
+        }
         app.acts = app.acts.filter(act => act.n > command.ack)
         app.hasLibrary = true
         return text(`${JSON.stringify(stats(), null, 2)}\n\n(captured at origin https://tiktok.com)`)
@@ -183,8 +199,34 @@ function makeApp(on: On, options: Options = {}) {
     props: { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 4, bodyColumns: 80, scroll: { offset: 0, bodyRows: 4 }, view: {} },
   } as const
 
+  let paneUi: any = null
+  const PANE = {
+    plugin: 'worknt', surface: 'desktop', component: 'Pane', requestId: 'worknt',
+    props: { title: 'Workn’t', isFocused: false, bodyColumns: 40, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  } as const
+
   return {
     app, clock, files, calls, tabs,
+    /** The settings pane as drawn now: which choice is lit in a row, and a press on any of its buttons. */
+    async pane($: any): Promise<{ lit: (row: string, choices: string[]) => Promise<string[]>; press: (key: string) => Promise<void>; has: (text: RegExp) => Promise<boolean> }> {
+      paneUi ??= await $.ui.mount(PANE)
+      const ui = paneUi
+      return {
+        lit: async (row, choices) => {
+          const out: string[] = []
+          for (const choice of choices) {
+            const button = await ui.find({ key: `${row}-${choice}` })
+            if (button?.props?.variant === 'primary') out.push(choice)
+          }
+          return out
+        },
+        press: async key => {
+          await ui.press({ key })
+          await clock.settle()
+        },
+        has: async text => (await ui.find({ type: 'Text', text })) !== undefined,
+      }
+    },
     browserCalls: (tool: string): Call[] => calls.filter(call => call.server === 'Claude_Browser' && call.tool === tool),
     report: (id = 'sess-a'): Report => JSON.parse(files.get(`${ROOT}/sessions/${id}.json`)?.text ?? 'null') as Report,
     settings: (): Record<string, unknown> => JSON.parse(files.get(`${ROOT}/settings.json`)?.text ?? '{}') as Record<string, unknown>,
@@ -582,6 +624,147 @@ test('T-1: the command changes a setting for every session at once, and says wha
   expect(world.settings().delaySec).toBe(20)
   expect((await $.command.run({ command: 'worknt', args: 'here off' } as never)).text).toBe('在这个项目里不再出现。')
   expect(world.settings().excluded).toEqual(['/proj/shop'])
-  expect((await $.command.run({ command: 'worknt', args: '' } as never)).text).toContain('开着 · TikTok · 有声 · 20 秒后询问')
+  expect((await $.command.run({ command: 'worknt', args: '' } as never)).text).toContain('开着 · TikTok · 有声 · 直播照常 · 20 秒后询问')
   expect((await $.command.run({ command: 'worknt', args: 'doctor' } as never)).text).toContain('awake: true')
+})
+
+/** A break that is up and playing, the turn still running. */
+const watching = async ($: any, world: ReturnType<typeof makeApp>): Promise<void> => {
+  await start($, world)
+  await typedTurn($, world)
+  await world.clock.advance(10_000)
+  await (await world.band($)).press('accept')
+  await world.clock.advance(1500)
+  expect(world.app.want?.mode).toBe('play')
+}
+
+test('W-10, R-3: a second break on the kept tab counts only its own clips, in the tally as on the line', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  world.app.videos = 6
+  world.app.watchMs = 77_000
+  await world.clock.advance(2500)
+  await (await world.band($)).press('give-up')
+  expect(world.app.want?.mode).toBe('rest')
+  expect(world.tabs).toHaveLength(2)
+
+  // Straight back in, on the tab that was kept: its page still holds the first break's numbers until it is told to start over.
+  await (await world.band($)).press('accept')
+  await world.clock.advance(2500)
+  expect(world.app.want?.mode).toBe('play')
+  expect(world.browserCalls('navigate')).toHaveLength(1)
+  world.app.videos = 3
+  world.app.watchMs = 22_000
+  await world.clock.advance(2500)
+  expect((await world.band($)).text).toBe('摸鱼中 0:22 · 3 条')
+  await (await world.band($)).press('give-up')
+  expect((await $.command.run({ command: 'worknt', args: 'bill' } as never)).text).toContain('你刷了 9 条，2 分钟')
+})
+
+test('I-2, R-3: leaving a break mid-turn is not followed by an invitation; the line offers the kept page instead', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  await (await world.band($)).press('give-up')
+  await world.clock.advance(4000)
+  const band = await world.band($)
+  expect(band.text).toBe('TikTok还开着')
+  expect(band.buttons).toEqual(['accept'])
+  expect(world.settings().declines).toBe(0)
+
+  await band.press('accept')
+  await world.clock.advance(1500)
+  expect(world.app.want?.mode).toBe('play')
+
+  // With the kept tab gone there is nothing to offer, and still no invitation until the next turn.
+  world.tabs.splice(world.tabs.findIndex(tab => tab.origin === 'https://tiktok.com'), 1)
+  await world.clock.advance(4000)
+  expect((await world.band($)).text).toBe('')
+  await endTurn($, world)
+  await typedTurn($, world, 't2')
+  await world.clock.advance(10_000)
+  expect((await world.band($)).text).toBe('刷会儿TikTok？')
+})
+
+test('T-1: a choice on the page\'s menu becomes the setting, and the page is told so', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  world.app.acts = [{ n: 1, id: 'set', arg: 'sound off' }, { n: 2, id: 'set', arg: 'live skip' }, { n: 3, id: 'set', arg: 'site douyin' }]
+  await world.clock.advance(2500)
+  expect(world.settings()).toMatchObject({ sound: 'off', live: 'skip', site: 'tiktok' })
+  const sent = world.browserCalls('javascript_tool').map(call => String(call.args.text)).filter(text => text.includes('"skipLive":true'))
+  expect(sent.length).toBeGreaterThan(0)
+  expect(sent[sent.length - 1]).toContain('"isMuted":true')
+})
+
+test('live streams: when the page asks, the mod presses the down key in the video tab, once per asking', async ($, on) => {
+  const world = makeApp(on, { settings: { ...READY, live: 'skip' } })
+  await watching($, world)
+  const keys = () => world.calls.filter(call => call.tool === 'computer' && call.args.action === 'key')
+  expect(keys()).toHaveLength(0)
+  world.app.acts = [{ n: 1, id: 'skip' }]
+  await world.clock.advance(2500)
+  expect(keys()).toHaveLength(1)
+  expect(keys()[0]?.args).toMatchObject({ text: 'ArrowDown', tabId: world.tabs.find(tab => tab.origin === 'https://tiktok.com')?.tabId })
+  await world.clock.advance(6000)
+  expect(keys()).toHaveLength(1)
+})
+
+test('T-1: the pane shows every setting as it stands, and a press changes it for good', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await start($, world)
+  await $.command.run({ command: 'worknt', args: '' } as never)
+  expect(world.app.paneOpens).toBe(1)
+
+  let pane = await world.pane($)
+  expect(await pane.lit('switch', ['on', 'off'])).toEqual(['on'])
+  expect(await pane.lit('site', ['douyin', 'tiktok'])).toEqual(['tiktok'])
+  expect(await pane.lit('sound', ['on', 'off'])).toEqual(['on'])
+  expect(await pane.lit('live', ['show', 'skip'])).toEqual(['show'])
+  expect(await pane.lit('delay', ['3', '8', '15', '30'])).toEqual(['8'])
+  expect(await pane.lit('here', ['on', 'off'])).toEqual(['on'])
+
+  await pane.press('sound-off')
+  await pane.press('live-skip')
+  await pane.press('delay-15')
+  await pane.press('here-off')
+  expect(world.settings()).toMatchObject({ sound: 'off', live: 'skip', delaySec: 15, excluded: ['/proj/shop'] })
+  pane = await world.pane($)
+  expect(await pane.lit('sound', ['on', 'off'])).toEqual(['off'])
+  expect(await pane.lit('live', ['show', 'skip'])).toEqual(['skip'])
+  expect(await pane.lit('delay', ['3', '8', '15', '30'])).toEqual(['15'])
+  expect(await pane.lit('here', ['on', 'off'])).toEqual(['off'])
+
+  // A value no button offers, set by command, lights none and shows in the row's label.
+  await $.command.run({ command: 'worknt', args: 'delay 20' } as never)
+  pane = await world.pane($)
+  expect(await pane.lit('delay', ['3', '8', '15', '30'])).toEqual([])
+  expect(await pane.has(/20 秒/)).toBe(true)
+
+  await pane.press('doctor-run')
+  pane = await world.pane($)
+  expect(await pane.has(/awake: true/)).toBe(true)
+})
+
+test('T-1: a setting changed in another session shows in this one\'s open pane', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await start($, world)
+  await $.command.run({ command: 'worknt', args: '' } as never)
+  await typedTurn($, world)
+  world.clock.advance(1000)
+  world.files.set(`${ROOT}/settings.json`, { text: JSON.stringify({ ...READY, sound: 'off' }), mtimeMs: world.clock.now() + 1 })
+  await world.clock.advance(4000)
+  expect(await (await world.pane($)).lit('sound', ['on', 'off'])).toEqual(['off'])
+})
+
+test('X-4: a reset ends the break, forgets every setting, and empties the logs', async ($, on) => {
+  const world = makeApp(on, { settings: READY })
+  await watching($, world)
+  world.files.set(`${ROOT}/logs/sess-b.log`, { text: '2026-01-05T02:00:00.000Z something another session noted\n', mtimeMs: NOW })
+  expect(world.log()).toContain('slack start')
+
+  await $.command.run({ command: 'worknt', args: 'reset' } as never)
+  expect(world.app.want?.mode).toBe('rest')
+  expect(world.settings()).toMatchObject({ site: null, sound: null, lang: null, hasSeenWelcome: false })
+  expect(world.files.get(`${ROOT}/logs/sess-b.log`)?.text).toBe('')
+  expect(world.log()).not.toContain('slack start')
 })

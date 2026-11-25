@@ -21,7 +21,7 @@ import type { PageStats, PageWant, SiteId } from './types'
  * is therefore decided here, not by a round trip to the mod.
  */
 
-export const PAGE_VERSION = 21
+export const PAGE_VERSION = 22
 
 export type PageConfig = {
   v: number
@@ -33,7 +33,17 @@ export type PageConfig = {
   isMuted: boolean
   /** W-3: how long without input before the page asks whether anyone is there. */
   idleMs: number
-  copy: { stillThere: string; stay: string; back: string; lost: string }
+  /** Live streams in the feed are moved past (the mod presses the key; the page only says when). */
+  skipLive: boolean
+  copy: { stillThere: string; stay: string; back: string; lost: string; tapToPlay: string }
+  /** T-1: the small menu on the video page. Null draws none. */
+  menu: PageMenu | null
+}
+
+/** One row is one setting: its choices, and the one in force. A choice made is reported as the act `set` with `<id> <value>`. */
+export type PageMenu = {
+  rows: { id: string; label: string; value: string; options: { value: string; label: string }[] }[]
+  back: string
 }
 
 export type PageCommand = {
@@ -96,6 +106,15 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       toastUntil: 0,
       silenced: [],
       volTouched: false,
+      blocked: false,
+      menuOpen: false,
+      pick: {},
+      lastMove: 0,
+      gearSince: 0,
+      view: { card: false, live: false, cue: false },
+      liveSince: 0,
+      skipAt: 0,
+      skips: 0,
       armed: false,
       timer: null,
       raf: 0,
@@ -164,6 +183,47 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       return !!v && !(v.duration > 0 && v.duration < 1e9)
     }
 
+    /** Takes up most of the window right now. */
+    W.fills = function (el: any): boolean {
+      var r = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null
+      if (!r) return false
+      var h = Math.max(0, Math.min(r.bottom, win.innerHeight) - Math.max(r.top, 0))
+      return h >= win.innerHeight * 0.5
+    }
+
+    /** The slide in view is a live stream, as far as the page can be sure. A clip still loading is not one. */
+    W.liveSlide = function (v: any): boolean {
+      if (W.cfg.site === 'douyin') {
+        var marks = W.all('[data-e2e="feed-live"]')
+        for (var i = 0; i < marks.length; i++) if (W.fills(marks[i])) return true
+      }
+      return !!v && v.readyState > 0 && (v.duration === Infinity || v.duration > 1e9)
+    }
+
+    /** A setting as it will be: the choice just made on the menu, until the mod's own word arrives. */
+    W.chosen = function (id: string, fallback: string): string {
+      return typeof W.pick[id] === 'string' ? W.pick[id] : fallback
+    }
+
+    W.isMuted = function (): boolean {
+      return W.chosen('sound', W.cfg.isMuted ? 'off' : 'on') === 'off'
+    }
+
+    W.skipsLive = function (): boolean {
+      return W.chosen('live', W.cfg.skipLive ? 'skip' : 'show') === 'skip'
+    }
+
+    /** The sound setting changed: stop holding the old one, and let the clip in view be heard if that is now wanted. */
+    W.applySound = function (): void {
+      W.volTouched = false
+      if (W.isMuted()) return
+      var v = W.cur()
+      if (v && v.muted && W.silenced.indexOf(v) === -1) {
+        W.ours()
+        v.muted = false
+      }
+    }
+
     /** True for an element that takes real room on the page; one the site keeps around hidden does not count. */
     W.shown = function (el: any): boolean {
       return !!el && el.offsetHeight > 60
@@ -222,9 +282,9 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
 
     // ---- acting on the page ----------------------------------------------
 
-    W.act = function (id: string): void {
+    W.act = function (id: string, arg?: string): void {
       W.actN += 1
-      W.acts.push({ n: W.actN, id: id })
+      W.acts.push(arg === undefined ? { n: W.actN, id: id } : { n: W.actN, id: id, arg: arg })
     }
 
     W.ours = function (): void {
@@ -270,7 +330,12 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       W.ours()
       try {
         var p = v.play()
-        if (p && p.catch) p.catch(function () {})
+        if (p && p.catch) {
+          p.catch(function (err: any) {
+            // S-7: the browser will not start it without a click. Say so instead of trying in silence.
+            if (err && err.name === 'NotAllowedError') W.blocked = true
+          })
+        }
       } catch (e) {}
     }
 
@@ -338,30 +403,41 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       W.act('more')
     }
 
-    W.draw = function (showCard: boolean): void {
+    W.draw = function (): void {
       var t = now()
       var want = W.want
+      var showCard = W.view.card
+      var locked = showCard || W.idleAsk
       var toast = want.toast && W.toastId === want.toast.id && t < W.toastUntil ? want.toast : null
-      var note = !showCard && !W.idleAsk ? want.note : null
+      var note = !locked ? want.note : null
+      var menu = !locked && W.view.live ? W.cfg.menu : null
+      if (!menu) W.menuOpen = false
+      var cue = !locked && W.view.cue
+      // T-1: the menu's button keeps out of the picture until the pointer moves, as a player's controls do.
+      var gear = !!menu && (W.menuOpen || t - W.lastMove < 2500 || t - W.gearSince < 4000)
       var dark = W.isDark()
+      var picks = ''
+      if (menu && W.menuOpen) for (var m = 0; m < menu.rows.length; m++) picks += W.chosen(menu.rows[m].id, menu.rows[m].value) + ','
       var sig = [
         showCard && want.card ? 'c:' + want.card.id + ':' + W.moreCount : '',
         W.idleAsk ? 'idle' : '',
         note ? 'n:' + note.id : '',
         toast ? 't:' + toast.id : '',
+        gear ? 'g' : '',
+        menu && W.menuOpen ? 'm:' + picks : '',
+        cue ? 'p' : '',
         dark ? 'd' : 'l',
       ].join('|')
       if (sig === W.drawn) return
       W.drawn = sig
       W.clear()
-      if (!showCard && !W.idleAsk && !note && !toast) return
+      if (!locked && !note && !toast && !gear && !cue) return
 
       var fg = dark ? '#f1efe8' : '#2c2c2a'
       var dim = dark ? '#b4b2a9' : '#5f5e5a'
       var bg = dark ? '#2c2c2a' : '#ffffff'
       var line = dark ? 'rgba(255,255,255,.14)' : 'rgba(0,0,0,.12)'
       var font = 'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;'
-      var locked = showCard || W.idleAsk
 
       var host = doc.createElement('div')
       host.id = 'worknt-host'
@@ -377,7 +453,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         root.appendChild(
           W.el(
             'div',
-            font + 'align-self:center;margin:12px;padding:8px 12px;border-radius:8px;font-size:13px;line-height:1.4;background:rgba(0,0,0,.78);color:#fff;',
+            font + 'align-self:center;margin:12px 52px;padding:8px 12px;border-radius:8px;font-size:13px;line-height:1.4;background:rgba(0,0,0,.78);color:#fff;',
             toast.text,
           ),
         )
@@ -418,7 +494,10 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         }
         box.appendChild(row)
         root.appendChild(box)
-      } else if (note) {
+        return
+      }
+
+      if (note) {
         var pill = W.el(
           'div',
           font +
@@ -434,6 +513,98 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
           pill.appendChild(link)
         }
         root.appendChild(pill)
+      }
+
+      if (cue) {
+        // S-7
+        var start = W.el(
+          'button',
+          font +
+            'pointer-events:auto;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);height:44px;padding:0 20px;border:0;border-radius:22px;font-size:15px;cursor:pointer;background:rgba(0,0,0,.72);color:#fff;',
+          W.cfg.copy.tapToPlay,
+        )
+        start.addEventListener('click', function () {
+          W.blocked = false
+          W.userPaused = false
+          W.play(W.cur())
+          W.step()
+        })
+        root.appendChild(start)
+      }
+
+      if (gear && menu) {
+        if (W.menuOpen) {
+          // Anything outside the menu closes it, and the click goes no further: it must not pause the clip.
+          var shade = W.el('div', 'pointer-events:auto;position:absolute;inset:0;background:transparent;', null)
+          shade.addEventListener('click', function (e: any) {
+            if (e && e.stopPropagation) e.stopPropagation()
+            W.menuOpen = false
+            W.draw()
+          })
+          root.appendChild(shade)
+        }
+        var dots = W.el(
+          'button',
+          font +
+            'pointer-events:auto;position:absolute;right:12px;top:12px;width:28px;height:28px;padding:0;border:0;border-radius:14px;font-size:16px;line-height:28px;text-align:center;cursor:pointer;background:rgba(0,0,0,.45);color:#fff;',
+          '⋯',
+        )
+        dots.addEventListener('click', function () {
+          W.menuOpen = !W.menuOpen
+          W.lastMove = now()
+          W.draw()
+        })
+        root.appendChild(dots)
+        if (W.menuOpen) {
+          var sheet = W.el(
+            'div',
+            font +
+              'pointer-events:auto;position:absolute;right:12px;top:48px;width:208px;padding:12px;border-radius:12px;box-sizing:border-box;background:' + bg + ';border:0.5px solid ' + line + ';',
+            null,
+          )
+          var pickCss = font + 'flex:1;height:30px;border-radius:8px;font-size:12px;cursor:pointer;padding:0 6px;'
+          for (var r = 0; r < menu.rows.length; r++) {
+            var one = menu.rows[r]
+            sheet.appendChild(W.el('div', 'font-size:12px;line-height:1.4;margin:' + (r === 0 ? '0' : '10px') + ' 0 6px;color:' + dim + ';', one.label))
+            var opts = W.el('div', 'display:flex;gap:6px;', null)
+            var current = W.chosen(one.id, one.value)
+            for (var o = 0; o < one.options.length; o++) {
+              var opt = one.options[o]
+              var isOn = opt.value === current
+              var b = W.el(
+                'button',
+                pickCss + (isOn ? 'border:0;background:' + fg + ';color:' + bg + ';' : 'background:transparent;color:' + fg + ';border:0.5px solid ' + line + ';'),
+                opt.label,
+              )
+              b.addEventListener('click', W.picker(one.id, opt.value, current))
+              opts.appendChild(b)
+            }
+            sheet.appendChild(opts)
+          }
+          var leave = W.el(
+            'button',
+            font + 'width:100%;height:30px;margin-top:12px;border-radius:8px;font-size:12px;cursor:pointer;background:transparent;color:' + fg + ';border:0.5px solid ' + line + ';',
+            menu.back,
+          )
+          leave.addEventListener('click', function () {
+            W.menuOpen = false
+            W.act('back')
+            W.draw()
+          })
+          sheet.appendChild(leave)
+          root.appendChild(sheet)
+        }
+      }
+    }
+
+    /** A choice on the menu: shown at once, done at once where the page can do it, and reported for the mod to keep. */
+    W.picker = function (id: string, value: string, current: string): any {
+      return function (): void {
+        if (value === current) return
+        W.pick[id] = value
+        W.act('set', id + ' ' + value)
+        if (id === 'sound') W.applySound()
+        W.draw()
       }
     }
 
@@ -509,7 +680,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         if (W.pauseOnce) {
           W.pauseAll()
         } else if (shouldPlay) {
-          if (W.cfg.isMuted && !W.volTouched && v && !v.muted) {
+          if (W.isMuted() && !W.volTouched && v && !v.muted) {
             W.ours()
             v.muted = true
           }
@@ -519,6 +690,22 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         }
       }
       W.pauseOnce = false
+      if (!shouldPlay || (v && !v.paused)) W.blocked = false
+
+      // A live stream in the feed, when the person has asked not to see them: say so, once per look, and let the mod press the key.
+      var isLiveNow = isFeed && W.liveSlide(v)
+      if (isLiveNow && shouldPlay && mode === 'play' && W.skipsLive()) {
+        if (!W.liveSince) W.liveSince = t
+        else if (t - W.liveSince >= 1000 && t - W.skipAt >= 2500 && W.skips < 8) {
+          W.skipAt = t
+          W.skips += 1
+          W.act('skip')
+        }
+      } else {
+        W.liveSince = 0
+        if (isFeed && !isLiveNow && v && t - W.skipAt > 4000) W.skips = 0
+      }
+
       if (locked !== W.locked) {
         W.locked = locked
         W.listen(locked)
@@ -544,7 +731,8 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         W.toastId = W.want.toast.id
         W.toastUntil = t + 5000
       }
-      W.draw(showCard)
+      W.view = { card: showCard, live: isFeed && (mode === 'play' || mode === 'paused'), cue: shouldPlay && W.blocked && !!v && v.paused }
+      W.draw()
     }
 
     // ---- listeners ---------------------------------------------------------
@@ -575,8 +763,14 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       }
     }
 
-    W.touched = function (): void {
-      W.lastInput = now()
+    W.touched = function (e: any): void {
+      var t = now()
+      W.lastInput = t
+      if (e && (e.type === 'mousemove' || e.type === 'pointerdown')) {
+        var wasOut = t - W.lastMove >= 2500
+        W.lastMove = t
+        if (wasOut && W.view.live) W.draw()
+      }
     }
 
     W.media = function (e: any): void {
@@ -592,7 +786,10 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       if (isOurs) return
       // W-4: a pause of the person's own is theirs to undo.
       if (e.type === 'pause' && (W.want.mode === 'play' || W.more)) W.userPaused = true
-      if (e.type === 'play') W.userPaused = false
+      if (e.type === 'play') {
+        W.userPaused = false
+        W.blocked = false
+      }
     }
 
     var TOUCH = ['pointerdown', 'keydown', 'wheel', 'touchstart', 'mousemove']
@@ -649,6 +846,7 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
         inputAgo: Math.max(0, now() - W.lastInput),
         videos: W.videos,
         watchMs: W.watchMs,
+        live: W.health === 'feed' && W.liveSlide(v),
         cardId: W.want.card ? W.want.card.id : null,
         more: !!W.more,
         idleAsk: W.idleAsk,
@@ -658,8 +856,15 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
     }
   }
 
+  var old = W.cfg
+  var wasMuted = W.isMuted()
   W.cfg = cfg
   W.lastSync = now()
+  if (old !== cfg) {
+    // The mod's word on a setting has arrived: a choice made on the menu no longer stands in for it.
+    if (JSON.stringify(old.menu) !== JSON.stringify(cfg.menu)) W.pick = {}
+    if (W.isMuted() !== wasMuted) W.applySound()
+  }
 
   if (cmd && typeof cmd.ack === 'number') {
     var kept = []
@@ -671,6 +876,21 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
     var prev = W.want
     var next = cmd.want
     W.lost = false
+    if (prev.mode === 'rest' && next.mode !== 'rest') {
+      // A new break on a page kept from the last one: nothing of that one is carried over, least of all its counts.
+      W.load = now()
+      W.videos = 0
+      W.watchMs = 0
+      W.seen = {}
+      W.dwellKey = null
+      W.dwellMs = 0
+      W.acts = []
+      W.pick = {}
+      W.menuOpen = false
+      W.blocked = false
+      W.volTouched = false
+      W.skips = 0
+    }
     if (!prev.card || !next.card || prev.card.id !== next.card.id) {
       W.more = null
       W.moreCount = 0
@@ -679,12 +899,14 @@ export function pageMain(env: any, cfg: any, cmd: any): any {
       W.userPaused = false
       W.idleAsk = false
       W.lastInput = now()
+      W.gearSince = now()
     }
     if ((next.mode === 'paused' || next.mode === 'rest') && prev.mode !== next.mode) W.pauseOnce = true
     W.want = next
     if (next.mode === 'rest') {
       W.step()
       W.disarm()
+      W.acts = []
     } else {
       W.arm()
       W.step()

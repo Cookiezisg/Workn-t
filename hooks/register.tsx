@@ -5,7 +5,7 @@ import { COPY } from './core/copy'
 import { BROWSER_PREFIX, judge, needsTabs, scrubResult } from './core/guard'
 import { SITES } from './core/sites'
 import type { Band } from '../types'
-import { apply, boot, command, copyOf, enqueue, guardView, newCtx, press, rememberTabs, shutdown } from './engine'
+import { EMPTY_PANEL, PANE_ID, apply, boot, command, copyOf, enqueue, guardView, newCtx, press, rememberTabs, showDoctor, shutdown } from './engine'
 import type { Press } from './engine'
 import { toPane } from './io/pane'
 
@@ -13,8 +13,14 @@ import { toPane } from './io/pane'
 const bandAtom = atom(
   { plugin: 'worknt', key: 'band' } as const,
   { view: { kind: 'none' }, lang: 'en', site: null } as Band,
-  { shape: 'band-2' },
+  { shape: 'band-3' },
 )
+/** What the settings pane shows; written by `engine.ts` in the same way. */
+const panelAtom = atom({ plugin: 'worknt', key: 'panel' } as const, EMPTY_PANEL, { shape: 'panel-1' })
+
+/** The choices the pane offers for the two durations. Any other value, set by command, shows in the row's label with none of these lit. */
+const DELAYS = [3, 8, 15, 30]
+const IDLES = [2, 5, 10, 30]
 
 /**
  * The hooks. Each one turns an engine event into a call on `engine.ts` and
@@ -28,7 +34,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'worknt',
       description: 'Workn’t: videos while Claude works · 设置、账单、自查',
-      argumentHint: 'on | off | douyin | tiktok | sound | lang | delay | idle | quiet | here | bill | doctor | reset',
+      argumentHint: 'on | off | douyin | tiktok | sound | live | lang | delay | idle | quiet | here | bill | doctor | reset',
     })
 
     return next(e)
@@ -153,6 +159,10 @@ export const register: Register = on => {
         text = copy.invite(site)
         buttons = [['accept', copy.yes], ['decline', copy.no]]
         break
+      case 'resume':
+        text = copy.resume(named)
+        buttons = [['accept', copy.resumeYes]]
+        break
       case 'quiet-ask':
         text = copy.quietAsk
         buttons = [['quiet-yes', copy.yes], ['quiet-no', copy.no]]
@@ -209,6 +219,105 @@ export const register: Register = on => {
             />
           </Box>
         ))}
+      </Box>
+    )
+  })
+
+  // T-1: every setting, changed with a click. Each button runs the same command the person could type.
+  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
+    const panel = await read($, panelAtom)
+    const copy = COPY[panel.lang]
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const run = (args: string) => () => {
+      void command($, c, args)
+    }
+
+    type Choice = { key: string; label: string; isOn: boolean; args: string }
+    const row = (id: string, label: string, choices: Choice[]) => (
+      <Box key={`row-${id}`} flexDirection="column" marginBottom={1}>
+        <Text dimColor>{label}</Text>
+        <Box flexDirection="row" gap={1}>
+          {choices.map(choice => (
+            <Button key={`${id}-${choice.key}`} label={choice.label} variant={choice.isOn ? 'primary' : 'secondary'} onPress={run(choice.args)} />
+          ))}
+        </Box>
+      </Box>
+    )
+
+    if (panel.dormant !== null) {
+      return (
+        <Box flexDirection="column">
+          <Text>{copy.dormant(panel.dormant)}</Text>
+        </Box>
+      )
+    }
+
+    const bills = [
+      panel.today.agentMs > 0 || panel.today.videos > 0 ? copy.bill(copy.today, panel.today.agentMs, panel.today.watchMs, panel.today.videos) : null,
+      panel.yesterday.agentMs > 0 || panel.yesterday.videos > 0 ? copy.bill(copy.yesterday, panel.yesterday.agentMs, panel.yesterday.watchMs, panel.yesterday.videos) : null,
+    ].filter((line): line is string => line !== null)
+
+    return (
+      <Box flexDirection="column">
+        {row('switch', copy.paneSwitch, [
+          { key: 'on', label: copy.paneOn, isOn: panel.isEnabled, args: 'on' },
+          { key: 'off', label: copy.paneOff, isOn: !panel.isEnabled, args: 'off' },
+        ])}
+        {row('site', panel.site === null ? `${copy.paneSite} · ${copy.paneNotChosen}` : copy.paneSite, [
+          { key: 'douyin', label: SITES.douyin.label[panel.lang], isOn: panel.site === 'douyin', args: 'douyin' },
+          { key: 'tiktok', label: SITES.tiktok.label[panel.lang], isOn: panel.site === 'tiktok', args: 'tiktok' },
+        ])}
+        {row('sound', panel.sound === null ? `${copy.setupSound} · ${copy.paneNotChosen}` : copy.setupSound, [
+          { key: 'on', label: copy.soundOn, isOn: panel.sound === 'on', args: 'sound on' },
+          { key: 'off', label: copy.soundOff, isOn: panel.sound === 'off', args: 'sound off' },
+        ])}
+        {row('live', copy.live, [
+          { key: 'show', label: copy.liveShow, isOn: panel.live === 'show', args: 'live show' },
+          { key: 'skip', label: copy.liveSkip, isOn: panel.live === 'skip', args: 'live skip' },
+        ])}
+        {row('lang', copy.paneLang, [
+          { key: 'zh', label: '中文', isOn: panel.lang === 'zh', args: 'lang zh' },
+          { key: 'en', label: 'English', isOn: panel.lang === 'en', args: 'lang en' },
+        ])}
+        {row(
+          'delay',
+          `${copy.paneDelay} · ${copy.seconds(panel.delaySec)}`,
+          DELAYS.map(n => ({ key: String(n), label: copy.seconds(n), isOn: panel.delaySec === n, args: `delay ${n}` })),
+        )}
+        {row(
+          'idle',
+          `${copy.paneIdle} · ${copy.minutes(panel.idleMin)}`,
+          IDLES.map(n => ({ key: String(n), label: copy.minutes(n), isOn: panel.idleMin === n, args: `idle ${n}` })),
+        )}
+        {row('quiet', copy.paneQuiet, [
+          { key: 'on', label: copy.paneOn, isOn: panel.isQuietToday, args: 'quiet' },
+          { key: 'off', label: copy.paneOff, isOn: !panel.isQuietToday, args: 'quiet off' },
+        ])}
+        {row('here', copy.paneHere, [
+          { key: 'on', label: copy.paneHereOn, isOn: !panel.isExcludedHere, args: 'here on' },
+          { key: 'off', label: copy.paneHereOff, isOn: panel.isExcludedHere, args: 'here off' },
+        ])}
+        <Text dimColor>{copy.paneHint}</Text>
+        {bills.length > 0 && (
+          <Box key="bills" flexDirection="column" marginTop={1}>
+            {bills.map(line => (
+              <Text>{line}</Text>
+            ))}
+          </Box>
+        )}
+        <Box key="doctor" flexDirection="column" marginTop={1}>
+          <Box flexDirection="row">
+            <Button
+              key="doctor-run"
+              label={copy.paneDoctor}
+              variant="secondary"
+              onPress={() => {
+                void showDoctor($, c)
+              }}
+            />
+          </Box>
+          {panel.doctor !== null && <Text mono dimColor>{panel.doctor}</Text>}
+        </Box>
       </Box>
     )
   })

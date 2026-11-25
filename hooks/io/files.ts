@@ -88,6 +88,7 @@ export function toSettings(raw: unknown): Settings {
     site: isSite(r.site) ? r.site : null,
     sound: r.sound === 'on' || r.sound === 'off' ? r.sound : null,
     lang: r.lang === 'zh' || r.lang === 'en' ? r.lang : null,
+    live: r.live === 'skip' ? 'skip' : 'show',
     delaySec: bounded(r.delaySec, 0, 600, DEFAULT_SETTINGS.delaySec),
     idleMin: bounded(r.idleMin, 1, 120, DEFAULT_SETTINGS.idleMin),
     quietDay: typeof r.quietDay === 'string' ? r.quietDay : null,
@@ -219,13 +220,31 @@ export function note(log: Log, now: number, line: string): void {
   log.isDirty = true
 }
 
-export async function flushLog($: $, p: Paths, sessionId: string, log: Log, now: number, isForced: boolean): Promise<void> {
+/** `since` leaves out what was noted before a reset (X-4); the lines begin with their time, so text order is time order. */
+export async function flushLog($: $, p: Paths, sessionId: string, log: Log, now: number, isForced: boolean, since = 0): Promise<void> {
   if (!log.isDirty || (!isForced && now - log.writtenAt < 3000)) return
+  if (since > 0) {
+    const from = new Date(since).toISOString()
+    log.lines = log.lines.filter(line => line.slice(0, from.length) >= from)
+  }
   log.isDirty = false
   log.writtenAt = now
   try {
-    await $.fs.write(`${p.logs}/${sessionId}.log`, `${log.lines.join('\n')}\n`)
+    await $.fs.write(`${p.logs}/${sessionId}.log`, log.lines.length === 0 ? '' : `${log.lines.join('\n')}\n`)
   } catch {
     log.isDirty = true
+  }
+}
+
+/**
+ * X-4: empties every session's log. The one place a session writes files that
+ * are not its own: a reset is the person's doing, in one place, once.
+ */
+export async function clearLogs($: $, p: Paths): Promise<void> {
+  for (const entry of await list($, p.logs)) {
+    if (!entry.name.endsWith('.log')) continue
+    try {
+      await $.fs.write(`${p.logs}/${entry.name}`, '')
+    } catch {}
   }
 }

@@ -7,9 +7,9 @@
  * they are passed on from here so the rest of the code has one place to import from.
  */
 
-import type { BandView, Lang, Linger, Scene, SiteId, Slack } from '../../types'
+import type { BandView, Lang, Linger, Panel, Scene, SiteId, Slack } from '../../types'
 
-export type { BandView, Lang, Linger, Scene, SiteId, Slack }
+export type { BandView, Lang, Linger, Panel, Scene, SiteId, Slack }
 
 
 /** What one session is doing, as that session itself reports it. */
@@ -60,6 +60,8 @@ export type Settings = {
   site: SiteId | null
   sound: 'on' | 'off' | null
   lang: Lang | null
+  /** What happens to a live stream that comes up in the feed. */
+  live: 'show' | 'skip'
   /** I-1: how long a turn runs before the invitation shows, seconds. */
   delaySec: number
   /** W-3: how long without any input counts as walked away, minutes. */
@@ -83,6 +85,7 @@ export const DEFAULT_SETTINGS: Settings = {
   site: null,
   sound: null,
   lang: null,
+  live: 'show',
   delaySec: 8,
   idleMin: 5,
   quietDay: null,
@@ -145,7 +148,12 @@ export type PageWant = {
   toast: Toast | null
 }
 
-export type PageAct = { n: number; id: 'back' | 'more' | 'stay' | 'home' }
+/**
+ * Something the person did on the page that the mod must act on. `skip` is the
+ * page asking for the key that moves the feed on; `set` carries a choice from
+ * the page's menu as `<setting> <value>`.
+ */
+export type PageAct = { n: number; id: 'back' | 'more' | 'stay' | 'home' | 'skip' | 'set'; arg?: string }
 
 /** What the page answers every time it is asked. */
 export type PageStats = {
@@ -162,6 +170,8 @@ export type PageStats = {
   inputAgo: number
   videos: number
   watchMs: number
+  /** The slide in view is a live stream. */
+  live: boolean
   cardId: string | null
   /** A "one more" clip is running. */
   more: boolean

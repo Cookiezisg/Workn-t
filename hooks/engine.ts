@@ -1,21 +1,21 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 
-import type { Band } from '../types'
+import type { Band, Panel } from '../types'
 import { COPY, guessLang } from './core/copy'
 import type { Copy } from './core/copy'
 import { TOAST_MS, decideGuest, decideHost } from './core/decide'
 import { PAGE_VERSION, isPageStats, statsScript, syncScript } from './core/page'
-import type { PageConfig } from './core/page'
+import type { PageConfig, PageMenu } from './core/page'
 import { alive, isActive, newMemory, newReport, reduce } from './core/report'
 import type { ReportEvent, ReportMemory } from './core/report'
 import type { TabInfo } from './core/guard'
 import { SITES, isSiteUrl } from './core/sites'
 import { DEFAULT_SETTINGS } from './core/types'
 import type { BandView, Day, EndWhy, Lang, Linger, PageStats, PageWant, Report, Settings, SiteId, Slack } from './core/types'
-import { addToDay, dayOf, flushLog, loadSettings, newLog, note, paths, readDay, readJson, readReports, saveSettings, writeReport, isReport } from './io/files'
+import { addToDay, clearLogs, dayOf, flushLog, loadSettings, newLog, note, paths, readDay, readJson, readReports, saveSettings, writeReport, isReport } from './io/files'
 import type { Log, Paths, ReportCache, SettingsCache } from './io/files'
-import { paneForGuard, closePane, closeTab, exec, giveFocus, layout as readLayout, navigate, openTab, pane as readPane, selectTab, showPane, titles as readTitles } from './io/pane'
+import { paneForGuard, closePane, closeTab, exec, giveFocus, layout as readLayout, navigate, openTab, pane as readPane, pressKey, selectTab, showPane, titles as readTitles } from './io/pane'
 
 /**
  * What one session's copy of the mod does between events: keeps its own
@@ -35,10 +35,20 @@ type Timer = { cancel: () => void }
 const bandAtom = atom(
   { plugin: 'worknt', key: 'band' } as const,
   { view: { kind: 'none' }, lang: 'en', site: null } as Band,
-  { shape: 'band-2' },
+  { shape: 'band-3' },
 )
 const slackAtom = atom({ plugin: 'worknt', key: 'slack' } as const, null as Slack | null, { shape: 'slack-2' })
 const lingerAtom = atom({ plugin: 'worknt', key: 'linger' } as const, null as Linger | null, { shape: 'linger-1' })
+
+const NO_DAY = { agentMs: 0, watchMs: 0, videos: 0 }
+export const EMPTY_PANEL: Panel = {
+  lang: 'en', dormant: null, isEnabled: true, site: null, sound: null, live: 'show', delaySec: 8, idleMin: 5,
+  isQuietToday: false, isExcludedHere: false, today: NO_DAY, yesterday: NO_DAY, doctor: null,
+}
+const panelAtom = atom({ plugin: 'worknt', key: 'panel' } as const, EMPTY_PANEL, { shape: 'panel-1' })
+
+/** T-1: the settings pane's name, here and where it is drawn. */
+export const PANE_ID = 'worknt'
 
 /**
  * Development only. When true, the mod takes button presses from a file and
@@ -77,12 +87,20 @@ export type Ctx = {
   /** The first-use question now on the line, while the person is answering them. */
   setup: 'lang' | 'site' | 'sound' | null
   hasDeclined: boolean
+  /** The person ended a break in the turn now running: no invitation until the next one. */
+  hasLeft: boolean
+  /** That break had been on screen, so its kept tab is worth offering again. */
+  canResume: boolean
   isAskingQuiet: boolean
   hasFailed: boolean
   lastBand: string
   publishedAt: number
-  /** The `want` last sent to the page, as text. */
+  /** What was last sent to the page, as text: the `want` and the settings the page goes by. Empty when nothing stands. */
   sent: string
+  sentWant: PageWant | null
+  /** The settings pane has been opened in this session, so it is kept current. */
+  isPanelOpen: boolean
+  panelDoctor: string | null
   /** Counts not yet written to the tally. */
   owed: Day
   owedAt: number
@@ -115,11 +133,16 @@ export const newCtx = (): Ctx => ({
   log: newLog(),
   setup: null,
   hasDeclined: false,
+  hasLeft: false,
+  canResume: false,
   isAskingQuiet: false,
   hasFailed: false,
   lastBand: '',
   publishedAt: 0,
   sent: '',
+  sentWant: null,
+  isPanelOpen: false,
+  panelDoctor: null,
   owed: { agentMs: 0, watchMs: 0, videos: 0 },
   owedAt: 0,
   errors: [],
@@ -242,6 +265,13 @@ async function settleTally($: $, c: Ctx, now: number, isForced: boolean): Promis
 const pageConfig = (c: Ctx, site: SiteId, theme: unknown): PageConfig => {
   const copy = copyOf(c)
   const settings = settingsOf(c)
+  const menu: PageMenu = {
+    rows: [
+      { id: 'sound', label: copy.setupSound, value: settings.sound === 'off' ? 'off' : 'on', options: [{ value: 'on', label: copy.soundOn }, { value: 'off', label: copy.soundOff }] },
+      { id: 'live', label: copy.live, value: settings.live, options: [{ value: 'show', label: copy.liveShow }, { value: 'skip', label: copy.liveSkip }] },
+    ],
+    back: copy.back,
+  }
   return {
     v: PAGE_VERSION,
     site,
@@ -249,8 +279,16 @@ const pageConfig = (c: Ctx, site: SiteId, theme: unknown): PageConfig => {
     isDark: theme === 'dark' ? true : theme === 'light' ? false : null,
     isMuted: settings.sound === 'off',
     idleMs: settings.idleMin * 60_000,
-    copy: { stillThere: copy.stillThere, stay: copy.stay, back: copy.back, lost: copy.lost },
+    skipLive: settings.live === 'skip',
+    copy: { stillThere: copy.stillThere, stay: copy.stay, back: copy.back, lost: copy.lost, tapToPlay: copy.tapToPlay },
+    menu,
   }
+}
+
+/** What the page was last told, as one text: a change in the `want` or in a setting the page goes by is a reason to tell it again. */
+const sentKey = (c: Ctx, want: PageWant): string => {
+  const settings = settingsOf(c)
+  return JSON.stringify([want, settings.sound, settings.live, settings.idleMin, langOf(c)])
 }
 
 async function readTheme($: $): Promise<unknown> {
@@ -266,7 +304,8 @@ async function syncPage($: $, c: Ctx, slack: Slack, want: PageWant): Promise<Pag
   const script = syncScript(pageConfig(c, slack.site, await readTheme($)), { want, ack: slack.ackedActs })
   const got = await exec($, slack.tabId, script)
   if (!isPageStats(got)) return null
-  c.sent = JSON.stringify(want)
+  c.sent = sentKey(c, want)
+  c.sentWant = want
   return got
 }
 
@@ -276,6 +315,65 @@ async function askPage($: $, slack: Slack): Promise<PageStats | 'missing' | null
   if (got === null) return null
   if (got.missing === true) return 'missing'
   return isPageStats(got) ? got : null
+}
+
+/** T-1: a choice made on the video page's own menu. Only the two settings that menu offers are taken from it. */
+async function setFromPage($: $, c: Ctx, arg: string | undefined): Promise<void> {
+  if (arg === 'sound on' || arg === 'sound off') await changeSettings($, c, { sound: arg === 'sound on' ? 'on' : 'off' })
+  else if (arg === 'live show' || arg === 'live skip') await changeSettings($, c, { live: arg === 'live show' ? 'show' : 'skip' })
+  else return
+  note(c.log, await $.clock.now(), `set from the page: ${arg}`)
+  if (c.isPanelOpen) await refreshPanel($, c)
+}
+
+// ---- the settings pane ------------------------------------------------------------
+
+/** Puts the settings as they stand, and the tally, where the pane reads them. */
+export async function refreshPanel($: $, c: Ctx): Promise<void> {
+  const settings = settingsOf(c)
+  const now = await $.clock.now()
+  let today = NO_DAY
+  let yesterday = NO_DAY
+  if (c.p !== null) {
+    await settleTally($, c, now, true)
+    today = await readDay($, c.p, dayOf(now), settings.resetAt)
+    yesterday = await readDay($, c.p, dayOf(now - 24 * 60 * 60_000), settings.resetAt)
+  }
+  const next: Panel = {
+    lang: langOf(c),
+    dormant: isAwake(c) ? null : (c.dormant ?? '?'),
+    isEnabled: settings.isEnabled,
+    site: settings.site,
+    sound: settings.sound,
+    live: settings.live,
+    delaySec: settings.delaySec,
+    idleMin: settings.idleMin,
+    isQuietToday: settings.quietDay === dayOf(now),
+    isExcludedHere: settings.excluded.includes(c.report.cwd),
+    today,
+    yesterday,
+    doctor: c.panelDoctor,
+  }
+  await update($, panelAtom, () => next)
+}
+
+/** Opens the pane. False where nothing draws panes, and the caller answers in words instead. */
+export async function openPanel($: $, c: Ctx): Promise<boolean> {
+  c.isPanelOpen = true
+  c.panelDoctor = null
+  await enqueue(c, () => refreshPanel($, c))
+  try {
+    const got = (await $.ui.open({ id: PANE_ID, title: 'Workn’t' })) as { isPlaced?: unknown }
+    return got?.isPlaced === true
+  } catch {
+    return false
+  }
+}
+
+/** The pane's own "self-check" button: the same report the command prints. */
+export async function showDoctor($: $, c: Ctx): Promise<void> {
+  c.panelDoctor = await doctor($, c)
+  await enqueue(c, () => refreshPanel($, c))
 }
 
 // ---- starting and ending a break ---------------------------------------------------
@@ -342,6 +440,7 @@ async function startSlack($: $, c: Ctx): Promise<void> {
 
   c.hasFailed = false
   c.sent = ''
+  c.sentWant = null
   c.lastPage = null
   c.slack = {
     startedAt: now,
@@ -378,7 +477,13 @@ export async function endSlack($: $, c: Ctx, why: EndWhy): Promise<void> {
   const now = await $.clock.now()
   c.slack = null
   c.sent = ''
+  c.sentWant = null
   c.lastWhy = why
+  if (why !== 'error' && why !== 'unusable' && why !== 'moved') {
+    // The person is done with it, or was not there. Either way the rest of this turn does not ask again.
+    c.hasLeft = true
+    c.canResume = slack.stage === 'live' && (why === 'back' || why === 'cancel')
+  }
   note(c.log, now, `slack end why=${why} watched=${slack.watchMs}ms videos=${slack.videos}`)
 
   const pane = await readPane($)
@@ -453,7 +558,7 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
   let isTabAlive = pane === null ? true : pane.tabs.some(tab => tab.tabId === slack.tabId)
   if (isTabAlive) {
     const asked = await askPage($, slack)
-    page = asked === 'missing' ? await syncPage($, c, slack, slack.stage === 'opening' || c.sent === '' ? HOLD : (JSON.parse(c.sent) as PageWant)) : asked
+    page = asked === 'missing' ? await syncPage($, c, slack, slack.stage === 'opening' || c.sentWant === null ? HOLD : c.sentWant) : asked
   }
   c.lastPage = page
   slack.silentSince = page !== null ? 0 : slack.silentSince || now
@@ -487,15 +592,18 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
   const isVisible = c.wasShown && layout?.isOnScreen !== false
   if (isVisible && (page === null || page.framesOk)) slack.seenAt = now
 
-  if (page !== null) {
+  if (page !== null && page.mode !== 'rest') {
     // W-10: add only what is new since the last look; a reloaded page starts its counters over.
+    // A page still at rest is showing the last break's numbers, which were counted then.
     if (page.load !== slack.counted.load) slack.counted = { load: page.load, videos: 0, watchMs: 0 }
     const more = { videos: Math.max(0, page.videos - slack.counted.videos), watchMs: Math.max(0, page.watchMs - slack.counted.watchMs) }
     slack.counted = { load: page.load, videos: page.videos, watchMs: page.watchMs }
     slack.videos += more.videos
     slack.watchMs += more.watchMs
     c.owed = { ...c.owed, videos: c.owed.videos + more.videos, watchMs: c.owed.watchMs + more.watchMs }
+  }
 
+  if (page !== null) {
     // L-3: the sign-in is over. Go to the feed without being asked.
     if (page.health === 'login') slack.sawLogin = true
     else if (slack.sawLogin && page.health !== 'loading' && page.health !== 'verify') {
@@ -538,11 +646,13 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
     if (act.n <= slack.ackedActs) continue
     slack.ackedActs = act.n
     if (act.id === 'home') await navigate($, slack.tabId, SITES[slack.site].feedUrl) // W-5
+    else if (act.id === 'skip') await pressKey($, slack.tabId, 'ArrowDown')
+    else if (act.id === 'set') await setFromPage($, c, act.arg)
   }
 
   const want = decision.want
   const wantedCard = want.card?.id ?? null
-  if (JSON.stringify(want) !== c.sent || page.mode !== want.mode || page.cardId !== wantedCard || page.lost) {
+  if (sentKey(c, want) !== c.sent || page.mode !== want.mode || page.cardId !== wantedCard || page.lost) {
     await syncPage($, c, slack, want)
   }
   if (wantedCard !== slack.cardId) {
@@ -571,10 +681,11 @@ async function guestTick($: $, c: Ctx, now: number, reports: Report[]): Promise<
   if (c.hasFailed) return setBand($, c, { kind: 'failed' })
   if (c.isAskingQuiet) return setBand($, c, { kind: 'quiet-ask' })
 
-  let view = decideGuest({ now, me: c.report, reports, titles: c.titles, settings, today: dayOf(now), hasDeclined: c.hasDeclined })
+  const world = { now, me: c.report, reports, settings, today: dayOf(now), hasDeclined: c.hasDeclined, hasLeft: c.hasLeft, canResume: c.canResume && c.linger !== null }
+  let view = decideGuest({ ...world, titles: c.titles })
   if (view.kind === 'elsewhere') {
     await refreshTitles($, c, now)
-    view = decideGuest({ now, me: c.report, reports, titles: c.titles, settings, today: dayOf(now), hasDeclined: c.hasDeclined })
+    view = decideGuest({ ...world, titles: c.titles })
   }
   // Section 13: say hello once, after a first turn has ended and nothing else is on the line.
   if (view.kind === 'none' && !settings.hasSeenWelcome && c.report.seq > 0 && !isActive(c.report.status)) {
@@ -602,13 +713,16 @@ function schedule($: $, c: Ctx, ms: number): void {
 export async function tick($: $, c: Ctx): Promise<void> {
   if (!isAwake(c) || c.p === null) return
   const now = await $.clock.now()
+  const held = c.settings
   c.settings = await loadSettings($, c.p, c.settings)
+  // T-1: a setting changed in another session shows in this one's pane as well.
+  if (c.settings !== held && c.isPanelOpen) await refreshPanel($, c)
   const reports = await allReports($, c, now)
   if (c.slack !== null) await hostTick($, c, c.slack, now, reports)
   if (c.slack === null) await guestTick($, c, now, reports)
   if ((isActive(c.report.status) || c.slack !== null) && now - c.publishedAt >= 5000) await publish($, c, now)
   await settleTally($, c, now, false)
-  await flushLog($, c.p, c.report.id, c.log, now, DEV_REMOTE)
+  await flushLog($, c.p, c.report.id, c.log, now, DEV_REMOTE, settingsOf(c).resetAt)
   if (DEV_REMOTE) await devRemote($, c)
   const delay = nextDelay(c)
   if (delay !== null) schedule($, c, delay)
@@ -726,6 +840,8 @@ export async function apply($: $, c: Ctx, event: ReportEvent): Promise<void> {
   c.memory = next.memory
   if (event.t === 'turn-start') {
     c.hasDeclined = false
+    c.hasLeft = false
+    c.canResume = false
   }
   if (event.t === 'turn-end' && settingsOf(c).isEnabled) {
     c.owed = { ...c.owed, agentMs: c.owed.agentMs + Math.max(0, event.durationMs) }
@@ -897,7 +1013,10 @@ export async function command($: $, c: Ctx, args: string): Promise<string> {
   if (!isAwake(c)) return copy.dormant(c.dormant ?? '?')
 
   const done = async (text: string): Promise<string> => {
-    await enqueue(c, () => tick($, c))
+    await enqueue(c, async () => {
+      await tick($, c)
+      if (c.isPanelOpen) await refreshPanel($, c)
+    })
     return text
   }
   const settings = settingsOf(c)
@@ -905,7 +1024,10 @@ export async function command($: $, c: Ctx, args: string): Promise<string> {
 
   if (first === undefined || first === 'status') {
     const sound = settings.sound === null ? null : settings.sound === 'on' ? copy.soundOn : copy.soundOff
-    return `${copy.status(settings.isEnabled, label(settings.site), sound, settings.delaySec, settings.idleMin)}\n${copy.usage}`
+    const live = settings.live === 'skip' ? copy.liveSkip : copy.liveShow
+    // T-1: the pane is the way to change things; the line says how they stand, wherever a pane cannot be drawn.
+    await openPanel($, c)
+    return `${copy.status(settings.isEnabled, label(settings.site), sound, live, settings.delaySec, settings.idleMin)}\n${copy.usage}`
   }
   if (first === 'on' || first === 'off') {
     await enqueue(c, () => changeSettings($, c, { isEnabled: first === 'on' }))
@@ -921,17 +1043,15 @@ export async function command($: $, c: Ctx, args: string): Promise<string> {
     return done(copy.siteSet(SITES[first].label[langOf(c)]))
   }
   if (first === 'sound' && (second === 'on' || second === 'off')) {
-    await enqueue(c, async () => {
-      await changeSettings($, c, { sound: second })
-      c.sent = ''
-    })
+    await enqueue(c, () => changeSettings($, c, { sound: second }))
     return done(copy.soundSet(second === 'on'))
   }
+  if (first === 'live' && (second === 'show' || second === 'skip')) {
+    await enqueue(c, () => changeSettings($, c, { live: second }))
+    return done(copy.liveSet(second === 'skip'))
+  }
   if (first === 'lang' && (second === 'zh' || second === 'en')) {
-    await enqueue(c, async () => {
-      await changeSettings($, c, { lang: second })
-      c.sent = ''
-    })
+    await enqueue(c, () => changeSettings($, c, { lang: second }))
     return done(COPY[second].langSet)
   }
   if ((first === 'delay' || first === 'idle') && second !== undefined && /^\d+$/.test(second)) {
@@ -968,13 +1088,20 @@ export async function command($: $, c: Ctx, args: string): Promise<string> {
       await endSlack($, c, 'cancel')
       await closeLinger($, c)
       c.owed = { agentMs: 0, watchMs: 0, videos: 0 }
-      if (c.p !== null) await saveSettings($, c.p, { ...settingsOf(c), isEnabled: true, site: null, sound: null, lang: null, delaySec: 8, idleMin: 5, quietDay: null, declines: 0, excluded: [], hasSeenWelcome: false, signedInOnce: [], resetAt: now })
+      if (c.p !== null) await saveSettings($, c.p, { ...DEFAULT_SETTINGS, resetAt: now })
       if (c.p !== null) c.settings = await loadSettings($, c.p, null)
+      // X-4: the logs go too. Other sessions drop what they still hold from before `resetAt` the next time they write.
+      c.log.lines = []
+      c.errors = []
+      c.panelDoctor = null
+      if (c.p !== null) await clearLogs($, c.p)
       c.setup = null
       c.hasFailed = false
       c.isAskingQuiet = false
+      c.hasLeft = false
+      c.canResume = false
     })
-    return done(COPY[langOf(c)].resetDone)
+    return done(copyOf(c).resetDone)
   }
   return copy.usage
 }
