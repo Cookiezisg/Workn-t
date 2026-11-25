@@ -28,6 +28,12 @@ function mentionsSite(value: unknown): boolean {
 
 type Step = { name: string; input: Record<string, unknown> }
 
+/** False for a call whose verdict cannot depend on which tabs are open: it acts on no tab at all. */
+export function needsTabs(tool: string, input: Record<string, unknown>): boolean {
+  const steps = stepsOf(tool, input)
+  return steps === null || steps.some(step => !TABLESS.has(step.name))
+}
+
 function stepsOf(tool: string, input: Record<string, unknown>): Step[] | null {
   const name = tool.slice(BROWSER_PREFIX.length)
   if (name !== 'browser_batch') return [{ name, input }]

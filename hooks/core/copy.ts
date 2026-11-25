@@ -67,6 +67,7 @@ export type Copy = {
   // Guard
   offLimits: string
   guardFailed: string
+  guardBusy: string
   // Command
   on: string
   off: string
@@ -147,6 +148,7 @@ export const COPY: Record<Lang, Copy> = {
     offLimits:
       '这个网站是用户自己刷视频用的，开着 Workn’t 时模型不能打开、读取或操作它。如果用户确实要你处理这个网站上的内容，请告诉用户先运行 /worknt off。',
     guardFailed: 'Workn’t 的守卫出错了，为保险起见拒绝了这次浏览器操作。运行 /worknt doctor 可以查看原因。',
+    guardBusy: 'Workn’t 的守卫这一刻没法确认标签页的情况，所以先拒绝了这一步。请把这个浏览器操作单独再发一次，不要和别的浏览器操作同时发。',
     on: '已开启。',
     off: '已关闭。关闭期间模型可以访问视频网站。',
     siteSet: site => `改成${site}了。`,
@@ -225,6 +227,7 @@ export const COPY: Record<Lang, Copy> = {
     offLimits:
       'This site is where the user watches videos. While Workn’t is on, the model may not open, read or control it. If the user really wants you to work on this site, tell them to run /worknt off first.',
     guardFailed: 'Workn’t’s guard failed, so this browser call was refused to be safe. /worknt doctor shows why.',
+    guardBusy: 'Workn’t’s guard could not check the tabs at this instant, so it refused this step. Send this browser call again on its own, not alongside other browser calls.',
     on: 'On.',
     off: 'Off. While it is off, the model can reach the video sites.',
     siteSet: site => `Switched to ${site}.`,

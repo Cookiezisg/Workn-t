@@ -184,6 +184,8 @@ export type EndWhy =
   | 'moved'
   | 'cancel'
   | 'error'
+  /** The tab can no longer be driven; a new one is needed. */
+  | 'unusable'
   | 'session-end'
   | 'reload'
 

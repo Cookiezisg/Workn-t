@@ -9,12 +9,13 @@ import { PAGE_VERSION, isPageStats, statsScript, syncScript } from './core/page'
 import type { PageConfig } from './core/page'
 import { alive, isActive, newMemory, newReport, reduce } from './core/report'
 import type { ReportEvent, ReportMemory } from './core/report'
+import type { TabInfo } from './core/guard'
 import { SITES, isSiteUrl } from './core/sites'
 import { DEFAULT_SETTINGS } from './core/types'
 import type { BandView, Day, EndWhy, Lang, PageStats, PageWant, Report, Settings, SiteId, Slack } from './core/types'
 import { addToDay, dayOf, flushLog, loadSettings, newLog, note, paths, readDay, readJson, readReports, saveSettings, writeReport, isReport } from './io/files'
 import type { Log, Paths, ReportCache, SettingsCache } from './io/files'
-import { NEEDED_TOOLS, closePane, closeTab, exec, giveFocus, layout as readLayout, navigate, openTab, pane as readPane, selectTab, showPane, titles as readTitles } from './io/pane'
+import { paneForGuard, closePane, closeTab, exec, giveFocus, layout as readLayout, navigate, openTab, pane as readPane, selectTab, showPane, titles as readTitles } from './io/pane'
 
 /**
  * What one session's copy of the mod does between events: keeps its own
@@ -88,6 +89,11 @@ export type Ctx = {
   lastPage: PageStats | null
   lastWhy: string
   devN: number
+  bootTries: number
+  /** The pane's tabs as last listed by anyone, for the guard to fall back on. */
+  tabsSeen: { at: number; tabs: readonly TabInfo[] } | null
+  /** Whether the browser pane was showing when it last could be asked. */
+  wasShown: boolean
 }
 
 export const newCtx = (): Ctx => ({
@@ -119,6 +125,9 @@ export const newCtx = (): Ctx => ({
   lastPage: null,
   lastWhy: '',
   devN: -1,
+  bootTries: 0,
+  tabsSeen: null,
+  wasShown: true,
 })
 
 // ---- small things --------------------------------------------------------------
@@ -130,6 +139,40 @@ export const langOf = (c: Ctx): Lang => settingsOf(c).lang ?? guessLang()
 export const copyOf = (c: Ctx): Copy => COPY[langOf(c)]
 
 export const isAwake = (c: Ctx): boolean => c.dormant === null && c.p !== null && c.report.id !== ''
+
+/** How old a remembered tab listing may be and still be judged by. */
+const TABS_FRESH_MS = 10_000
+
+export function rememberTabs(c: Ctx, now: number, tabs: readonly TabInfo[]): void {
+  c.tabsSeen = { at: now, tabs }
+}
+
+/**
+ * What the guard needs, read fresh: the switch as it stands on disk this
+ * instant (another session may have just flipped it, T-1) and the pane's tabs.
+ *
+ * The engine refuses a mod's call that repeats a call of the model's still
+ * awaiting permission. The model listing the tabs is such a call, so while
+ * one is in flight the mod cannot list them itself. `needsTabs` false skips
+ * the question where the answer cannot change the verdict; otherwise a
+ * listing remembered from the last few seconds stands in, and failing that
+ * `tabs` is null: the guard refuses and asks for the call again on its own.
+ */
+export async function guardView($: $, c: Ctx, needsTabs: boolean): Promise<{ isOn: boolean; tabs: readonly TabInfo[] | null }> {
+  if (!isAwake(c) || c.p === null) return { isOn: false, tabs: null }
+  c.settings = await loadSettings($, c.p, c.settings)
+  if (!c.settings.value.isEnabled) return { isOn: false, tabs: null }
+  if (!needsTabs) return { isOn: true, tabs: [] }
+  const now = await $.clock.now()
+  const got = await paneForGuard($)
+  if (got.pane !== null) {
+    rememberTabs(c, now, got.pane.tabs)
+    return { isOn: true, tabs: got.pane.tabs }
+  }
+  if (c.tabsSeen !== null && now - c.tabsSeen.at <= TABS_FRESH_MS) return { isOn: true, tabs: c.tabsSeen.tabs }
+  note(c.log, now, `guard could not list the tabs: ${got.why}`)
+  return { isOn: true, tabs: null }
+}
 
 /** The guard is on wherever the mod is awake and switched on (P-6). */
 export const isGuarding = (c: Ctx): boolean => isAwake(c) && settingsOf(c).isEnabled
@@ -262,21 +305,21 @@ async function startSlack($: $, c: Ctx): Promise<void> {
   if (c.slack !== null || site === null || !isAwake(c)) return
   const now = await $.clock.now()
   const before = await readPane($)
-  if (before === null) {
-    c.hasFailed = true
-    fail(c, now, 'start', 'the browser pane did not answer')
-    return
-  }
-  // S-2: the pane as it stands at this click, to put back later.
-  const scene = { isPaneOpen: before.isOpen && before.isShown, activeTab: before.tabs.find(tab => tab.isActive)?.tabId ?? null }
+  if (before !== null) rememberTabs(c, now, before.tabs)
+  // S-2: the pane as it stands at this click, to put back later. Where it cannot be seen, nothing is put back.
+  const scene =
+    before === null
+      ? { isPaneOpen: true, activeTab: null }
+      : { isPaneOpen: before.isOpen && before.isShown, activeTab: before.tabs.find(tab => tab.isActive)?.tabId ?? null }
 
   let tabId: string | null = null
   const kept = c.linger
-  if (kept !== null && kept.site === site && before.tabs.some(tab => tab.tabId === kept.tabId && isSiteUrl(tab.origin))) {
+  if (kept !== null && kept.site === site && before !== null && before.tabs.some(tab => tab.tabId === kept.tabId && isSiteUrl(tab.origin))) {
     tabId = kept.tabId
   }
+  if (tabId === null && kept !== null && before !== null) await closeTab($, kept.tabId)
   dropLinger(c)
-  if (tabId === null) tabId = await openTab($, SITES[site].feedUrl, before.isOpen)
+  if (tabId === null) tabId = await openTab($, SITES[site].feedUrl)
   if (tabId === null) {
     c.hasFailed = true
     fail(c, now, 'start', 'could not open a tab')
@@ -324,17 +367,20 @@ export async function endSlack($: $, c: Ctx, why: EndWhy): Promise<void> {
   note(c.log, now, `slack end why=${why} watched=${slack.watchMs}ms videos=${slack.videos}`)
 
   const pane = await readPane($)
-  const isTabAlive = pane?.tabs.some(tab => tab.tabId === slack.tabId) === true
-  if (isTabAlive && why !== 'left') {
+  let isTabAlive = pane?.tabs.some(tab => tab.tabId === slack.tabId) === true
+  if ((isTabAlive || pane === null) && why !== 'left' && why !== 'closed') {
     // R-4: whatever happens next, the page is left an ordinary, paused page.
-    await exec($, slack.tabId, syncScript(pageConfig(c, slack.site, undefined), { want: REST, ack: slack.ackedActs }))
+    const rested = await exec($, slack.tabId, syncScript(pageConfig(c, slack.site, undefined), { want: REST, ack: slack.ackedActs }))
+    if (pane === null) isTabAlive = rested !== null
+  }
+  if (isTabAlive && why !== 'left' && why !== 'unusable') {
     c.linger = { tabId: slack.tabId, site: slack.site, until: now + LINGER_MS }
     c.lingerTimer = $.clock.after(LINGER_MS, () => {
       void enqueue(c, () => closeLinger($, c))
     })
   }
   // S-2: only undo what we did. If our tab is no longer in front, the person has moved on already.
-  if (isTabAlive && pane?.tabs.find(tab => tab.isActive)?.tabId === slack.tabId && why !== 'left') {
+  if (isTabAlive && pane !== null && pane.tabs.find(tab => tab.isActive)?.tabId === slack.tabId && why !== 'left') {
     const previous = slack.scene.activeTab
     if (previous !== null && previous !== slack.tabId && pane.tabs.some(tab => tab.tabId === previous)) {
       await selectTab($, previous)
@@ -343,7 +389,7 @@ export async function endSlack($: $, c: Ctx, why: EndWhy): Promise<void> {
     }
   }
 
-  if (why === 'error') c.hasFailed = true
+  if (why === 'error' || why === 'unusable') c.hasFailed = true
   c.report = { ...c.report, claim: null, seen: false }
   await publish($, c, now)
   await saveSlack($, c)
@@ -365,40 +411,50 @@ async function refreshTitles($: $, c: Ctx, now: number): Promise<void> {
 }
 
 /** S-4, S-5, S-8: once the page has something to show, bring it out. */
-async function reveal($: $, c: Ctx, slack: Slack, now: number): Promise<void> {
-  await selectTab($, slack.tabId)
+async function reveal($: $, c: Ctx, slack: Slack, now: number): Promise<boolean> {
+  if (!(await selectTab($, slack.tabId))) {
+    // The tab cannot be brought forward (the engine refuses the mod a call it refused the model). A fresh tab will do.
+    note(c.log, now, 'reveal failed: the tab could not be selected')
+    return false
+  }
   await showPane($)
   const hasFocus = await giveFocus($, slack.tabId)
   slack.stage = 'live'
   slack.seenAt = now
   note(c.log, now, `revealed after ${now - slack.openedAt}ms focus=${hasFocus}`)
+  return true
 }
 
 async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report[]): Promise<void> {
   const pane = await readPane($)
-  if (pane === null) {
-    // The pane did not answer. That says nothing about the tab, so decide nothing; give up only if it stays silent.
-    slack.silentSince = slack.silentSince || now
-    if (now - slack.silentSince > SILENT_MS) return endSlack($, c, 'error')
-    return
+  if (pane !== null) {
+    rememberTabs(c, now, pane.tabs)
+    c.wasShown = pane.isShown
   }
   const layout = await readLayout($)
   if (layout?.localId && layout.localId !== c.report.localId) c.report = { ...c.report, localId: layout.localId }
-  const isTabAlive = pane.tabs.some(tab => tab.tabId === slack.tabId)
 
+  // Without a listing, the page answering is what says the tab is still there.
   let page: PageStats | null = null
+  let isTabAlive = pane === null ? true : pane.tabs.some(tab => tab.tabId === slack.tabId)
   if (isTabAlive) {
     const asked = await askPage($, slack)
     page = asked === 'missing' ? await syncPage($, c, slack, slack.stage === 'opening' || c.sent === '' ? HOLD : (JSON.parse(c.sent) as PageWant)) : asked
   }
   c.lastPage = page
   slack.silentSince = page !== null ? 0 : slack.silentSince || now
+  if (pane === null && page === null) {
+    // Neither the pane nor the page answers. Decide nothing yet; give up only if it lasts.
+    if (now - slack.silentSince > SILENT_MS) return endSlack($, c, 'error')
+    return
+  }
+  if (pane === null) isTabAlive = true
 
   if (slack.stage === 'opening') {
     if (!isTabAlive) return endSlack($, c, 'closed')
     if (page !== null && page.mode !== 'hold') page = (await syncPage($, c, slack, HOLD)) ?? page
     if (page !== null && page.health !== 'loading') {
-      await reveal($, c, slack, now)
+      if (!(await reveal($, c, slack, now))) return endSlack($, c, 'unusable')
     } else if (page === null && slack.silentSince > 0 && now - slack.silentSince > SILENT_MS) {
       return endSlack($, c, 'error')
     } else if (now - slack.openedAt > OPEN_LIMIT_MS + slack.patienceMs) {
@@ -414,7 +470,7 @@ async function hostTick($: $, c: Ctx, slack: Slack, now: number, reports: Report
     return endSlack($, c, 'error')
   }
 
-  const isVisible = pane.isShown && layout?.isOnScreen !== false
+  const isVisible = c.wasShown && layout?.isOnScreen !== false
   if (isVisible && (page === null || page.framesOk)) slack.seenAt = now
 
   if (page !== null) {
@@ -548,25 +604,19 @@ export function kick($: $, c: Ctx): void {
 
 // ---- events from the engine ------------------------------------------------------
 
-/** D-3: finds out where this session is and whether the mod can work here at all. */
-export async function boot($: $, c: Ctx): Promise<void> {
-  const now = await $.clock.now()
+/**
+ * D-3: finds out where this session is and whether the mod can work here at
+ * all. The check is by doing, not by looking names up: if the pane and the
+ * window both answer over the road the mod uses, it can work.
+ */
+async function wake($: $, c: Ctx, now: number): Promise<void> {
   c.p = await paths($)
-  let surfaces: readonly string[] = []
-  let tools: string[] = []
-  try {
-    surfaces = await $.session.surfaces()
-    tools = ((await $.tool.list()) as { name: string }[]).map(tool => tool.name)
-  } catch (err) {
-    fail(c, now, 'boot', err)
+  if (c.p === null) {
+    c.dormant = 'HOME'
+    return
   }
-  if (c.p !== null) c.settings = await loadSettings($, c.p, null)
+  c.settings = await loadSettings($, c.p, null)
   const copy = copyOf(c)
-  const missing = NEEDED_TOOLS.filter(name => !tools.includes(name))
-  if (c.p === null) c.dormant = 'HOME'
-  else if (!surfaces.includes('desktop')) c.dormant = copy.notDesktop
-  else if (missing.length > 0) c.dormant = copy.missingTools(missing.map(name => name.replace(/^mcp__/, '')).join(', '))
-  else c.dormant = null
 
   let id = ''
   let cwd = ''
@@ -574,29 +624,73 @@ export async function boot($: $, c: Ctx): Promise<void> {
     id = await $.session.id()
     cwd = await $.session.root()
   } catch (err) {
-    fail(c, now, 'boot', err)
+    fail(c, now, 'session', err)
   }
   const fresh = newReport(id, cwd, now)
-  const previous = c.p !== null && id !== '' ? await readJson($, `${c.p.sessions}/${id}.json`) : null
+  const previous = id !== '' ? await readJson($, `${c.p.sessions}/${id}.json`) : null
   c.report = isReport(previous) ? { ...fresh, seq: previous.seq, lastMs: previous.lastMs, localId: previous.localId } : fresh
-  note(c.log, now, `boot v${PAGE_VERSION} dormant=${String(c.dormant)} session=${id.slice(0, 8)}`)
-  if (!isAwake(c)) return
 
-  // R-8: a reloaded mod finds the break it was running and carries on.
-  const held = await read($, slackAtom)
-  if (held !== null) {
-    c.slack = held
-    c.report = { ...c.report, claim: held.startedAt, seen: false }
-    note(c.log, now, 'resumed a break after reload')
-  }
+  // The browser pane and the window exist only in the desktop app, so asking them is also the test for being there.
+  // (The session's list of attached surfaces is not: it is empty whenever the session is not on screen.)
+  const pane = await readPane($)
   const layout = await readLayout($)
+  if (pane === null) {
+    // Say why, so a wrong guess about the cause can be told from the record (D-4).
+    const why = await paneForGuard($)
+    note(c.log, now, `the pane did not answer at start-up: ${why.why}`)
+  }
+  if (pane === null && layout === null) {
+    c.dormant = copy.notDesktop
+    return
+  }
+  // One of the two answering is enough: the engine can refuse the mod's tab listing for a while
+  // (it does whenever the same call by the model is waiting for, or was refused, permission).
+  c.dormant = id === '' ? 'session' : null
   if (layout?.localId) c.report = { ...c.report, localId: layout.localId }
-  await publish($, c, now)
-  await tick($, c)
+}
+
+export async function boot($: $, c: Ctx): Promise<void> {
+  const now = await $.clock.now()
+  try {
+    await wake($, c, now)
+  } catch (err) {
+    c.dormant = c.dormant ?? 'boot'
+    fail(c, now, 'boot', err)
+  }
+  note(c.log, now, `boot v${PAGE_VERSION} dormant=${String(c.dormant)} session=${c.report.id.slice(0, 8)}`)
+  try {
+    if (isAwake(c)) {
+      // R-8: a reloaded mod finds the break it was running and carries on.
+      const held = await read($, slackAtom)
+      if (held !== null) {
+        c.slack = held
+        c.report = { ...c.report, claim: held.startedAt, seen: false }
+        note(c.log, now, 'resumed a break after reload')
+      }
+      await publish($, c, now)
+      await tick($, c)
+    }
+  } catch (err) {
+    fail(c, now, 'boot', err)
+  } finally {
+    // D-2: whatever happened, it is on record.
+    if (c.p !== null) await flushLog($, c.p, c.report.id || 'unknown', c.log, now, true)
+  }
+  // The app's own servers may still be coming up when a session starts: look again a few times before settling for asleep.
+  if (!isAwake(c) && c.bootTries < 6) {
+    c.bootTries += 1
+    c.loop?.cancel()
+    c.loop = $.clock.after(5000, () => {
+      c.loop = null
+      void enqueue(c, () => boot($, c))
+    })
+  }
 }
 
 /** The one place the report changes. */
 export async function apply($: $, c: Ctx, event: ReportEvent): Promise<void> {
+  // Asleep because the app's own servers were not up yet when the session began: look again as each turn starts.
+  if (!isAwake(c) && event.t === 'turn-start') await boot($, c)
   if (!isAwake(c)) return
   const before = c.report.status
   const next = reduce(c.report, c.memory, event)
@@ -735,7 +829,8 @@ async function doctor($: $, c: Ctx): Promise<string> {
   const lines: string[] = []
   let version = ''
   try {
-    version = String(await $.session.version())
+    const got = (await $.session.version()) as unknown
+    version = typeof got === 'string' ? got : JSON.stringify(got)
   } catch {
     version = '?'
   }

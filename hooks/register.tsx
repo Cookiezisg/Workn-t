@@ -2,12 +2,12 @@ import { atom, read } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import { COPY } from './core/copy'
-import { BROWSER_PREFIX, judge, scrubResult } from './core/guard'
+import { BROWSER_PREFIX, judge, needsTabs, scrubResult } from './core/guard'
 import { SITES } from './core/sites'
 import type { Band } from '../types'
-import { apply, boot, command, copyOf, enqueue, isGuarding, newCtx, press, shutdown } from './engine'
+import { apply, boot, command, copyOf, enqueue, guardView, newCtx, press, rememberTabs, shutdown } from './engine'
 import type { Press } from './engine'
-import { pane as readPane } from './io/pane'
+import { toPane } from './io/pane'
 
 /** The line above the prompt. `engine.ts` writes it under the same reference; the engine wants each file to name what it reads. */
 const bandAtom = atom(
@@ -75,13 +75,15 @@ export const register: Register = on => {
     }
 
     const isBrowser = isModel && name.startsWith(BROWSER_PREFIX)
+    let isGuarded = false
     if (isBrowser) {
       await c.booted
-      if (isGuarding(c)) {
-        const { tool: _tool, tool_use_id: _id, agentId: _agent, requestMeta: _meta, ...args } = input
-        const pane = await readPane($)
-        if (pane === null) return { deny: copyOf(c).guardFailed } // P-4
-        if (judge(name, args, pane.tabs) === 'deny') return { deny: copyOf(c).offLimits } // P-1
+      const { tool: _tool, tool_use_id: _id, agentId: _agent, requestMeta: _meta, ...args } = input
+      const view = await guardView($, c, needsTabs(name, args))
+      isGuarded = view.isOn
+      if (view.isOn) {
+        if (view.tabs === null) return { deny: copyOf(c).guardBusy } // P-4
+        if (judge(name, args, view.tabs) === 'deny') return { deny: copyOf(c).offLimits } // P-1
       }
     }
 
@@ -93,9 +95,14 @@ export const register: Register = on => {
       }
     }
 
-    if (isBrowser && isGuarding(c)) {
+    if (isGuarded) {
       // P-3: the answer lists every tab's title and address. Blank the video site's.
-      const got = ran as unknown as { deny?: unknown; result?: unknown; context?: readonly string[] }
+      const got = ran as unknown as { deny?: unknown; result?: unknown; text?: unknown; context?: readonly string[] }
+      if (name === `${BROWSER_PREFIX}tabs_context` && typeof got.text === 'string') {
+        // The model's own listing is as good as ours: keep it for the guard's next verdict.
+        const listed = toPane(got.text)
+        if (listed !== null) rememberTabs(c, Date.now(), listed.tabs)
+      }
       if (got.deny === undefined && got.result !== undefined) {
         const cleaned = scrubResult(got.result)
         if (cleaned.changed) {

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { judge, scrub, scrubResult } from './guard'
+import { judge, needsTabs, scrub, scrubResult } from './guard'
 import type { TabInfo } from './guard'
 import { isSiteUrl } from './sites'
 
@@ -85,4 +85,13 @@ test('a video site is recognised by its host, not by the word appearing somewher
   expect(isSiteUrl('https://notdouyin.com/')).toBe(false)
   expect(isSiteUrl('https://example.com/?next=douyin.com')).toBe(false)
   expect(isSiteUrl('not a url')).toBe(false)
+})
+
+test('the guard need not list the tabs for a call that acts on none', () => {
+  expect(needsTabs(`${B}tabs_context`, {})).toBe(false)
+  expect(needsTabs(`${B}tabs_create`, {})).toBe(false)
+  expect(needsTabs(`${B}get_page_text`, {})).toBe(true)
+  expect(needsTabs(`${B}browser_batch`, { actions: [{ name: 'tabs_context', input: {} }] })).toBe(false)
+  expect(needsTabs(`${B}browser_batch`, { actions: [{ name: 'tabs_context', input: {} }, { name: 'navigate', input: { url: 'https://example.com' } }] })).toBe(true)
+  expect(needsTabs(`${B}browser_batch`, { actions: 'broken' })).toBe(true)
 })

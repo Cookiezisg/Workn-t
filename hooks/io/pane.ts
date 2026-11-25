@@ -19,19 +19,6 @@ const VIEW = 'ccd_view'
 const WINDOW = 'ccd_window'
 const SESSIONS = 'ccd_session_mgmt'
 
-/** The tools the mod cannot work without, as the tool list names them (D-3). */
-export const NEEDED_TOOLS: readonly string[] = [
-  'mcp__Claude_Browser__tabs_context',
-  'mcp__Claude_Browser__tabs_create',
-  'mcp__Claude_Browser__tabs_select',
-  'mcp__Claude_Browser__tabs_close',
-  'mcp__Claude_Browser__navigate',
-  'mcp__Claude_Browser__javascript_tool',
-  'mcp__ccd_view__show_pane',
-  'mcp__ccd_view__close_pane',
-  'mcp__ccd_window__get_window_layout',
-]
-
 /** The first JSON object or array in a tool's text, which wraps it in notes. */
 export function firstJson(text: string | undefined): unknown {
   if (!text) return null
@@ -79,17 +66,42 @@ export async function call($: $, server: string, tool: string, args: Record<stri
 
 export type Pane = { isOpen: boolean; isShown: boolean; tabs: TabInfo[] }
 
-export async function pane($: $): Promise<Pane | null> {
-  const got = await call($, BROWSER, 'tabs_context')
-  if (!got.isOk) return null
-  const json = firstJson(got.text) as { browserOpen?: unknown; tabs?: unknown } | null
+/** Reads a tab listing, as `tabs_context` words it, whoever asked for it. */
+export function toPane(text: string): Pane | null {
+  const json = firstJson(text) as { browserOpen?: unknown; tabs?: unknown } | null
   if (json === null || typeof json !== 'object') return null
   const tabs = Array.isArray(json.tabs)
     ? (json.tabs as { tabId?: unknown; origin?: unknown; isActive?: unknown }[])
         .filter(tab => typeof tab?.tabId === 'string')
         .map(tab => ({ tabId: String(tab.tabId), origin: typeof tab.origin === 'string' ? tab.origin : '', isActive: tab.isActive === true }))
     : []
-  return { isOpen: json.browserOpen === true, isShown: /currently displayed/.test(got.text), tabs }
+  return { isOpen: json.browserOpen === true, isShown: /currently displayed/.test(text), tabs }
+}
+
+export async function pane($: $): Promise<Pane | null> {
+  const got = await call($, BROWSER, 'tabs_context')
+  return got.isOk ? toPane(got.text) : null
+}
+
+/**
+ * The pane's tabs for the guard, which asks from inside a tool call. Tries
+ * the direct road first and the tool road second, and says why when neither
+ * answers, so a guard that has to refuse can explain itself (P-4, D-4).
+ */
+export async function paneForGuard($: $): Promise<{ pane: Pane | null; why: string }> {
+  const direct = await call($, BROWSER, 'tabs_context')
+  const first = direct.isOk ? toPane(direct.text) : null
+  if (first !== null) return { pane: first, why: '' }
+  let why = `direct: ${direct.text.slice(0, 160)}`
+  try {
+    const ran = (await $.tool.call({ tool: 'mcp__Claude_Browser__tabs_context' } as never)) as { text?: unknown; deny?: unknown }
+    const second = typeof ran.text === 'string' ? toPane(ran.text) : null
+    if (second !== null) return { pane: second, why }
+    why += ` | tool: ${String(ran.deny ?? ran.text).slice(0, 160)}`
+  } catch (err) {
+    why += ` | tool: ${String(err).slice(0, 160)}`
+  }
+  return { pane: null, why }
 }
 
 export type Layout = { localId: string | null; isOnScreen: boolean }
@@ -116,26 +128,24 @@ export async function titles($: $): Promise<Record<string, string>> {
 }
 
 /**
- * Opens a tab of our own on `url` without bringing it to the front. Where the
- * pane is closed, the first navigation opens it, hidden, with that tab in it.
+ * Opens a tab of our own on `url` without bringing it to the front. Tries a
+ * new tab first; where the pane is closed there is none to be had, and the
+ * first navigation opens the pane, hidden, with that tab in it.
  */
-export async function openTab($: $, url: string, isPaneOpen: boolean): Promise<string | null> {
-  if (!isPaneOpen) {
-    const opened = await call($, BROWSER, 'navigate', { url })
-    const json = opened.isOk ? (firstJson(opened.text) as { tabId?: unknown } | null) : null
-    if (typeof json?.tabId === 'string') return json.tabId
-    const now = await pane($)
-    return now?.tabs.find(tab => tab.isActive)?.tabId ?? now?.tabs[0]?.tabId ?? null
-  }
+export async function openTab($: $, url: string): Promise<string | null> {
   const made = await call($, BROWSER, 'tabs_create')
-  const json = made.isOk ? (firstJson(made.text) as { tabId?: unknown } | null) : null
-  if (typeof json?.tabId !== 'string') return null
-  const went = await call($, BROWSER, 'navigate', { url, tabId: json.tabId })
-  if (!went.isOk) {
-    await call($, BROWSER, 'tabs_close', { tabId: json.tabId })
+  const created = made.isOk ? (firstJson(made.text) as { tabId?: unknown } | null) : null
+  if (typeof created?.tabId === 'string') {
+    if ((await call($, BROWSER, 'navigate', { url, tabId: created.tabId })).isOk) return created.tabId
+    await call($, BROWSER, 'tabs_close', { tabId: created.tabId })
     return null
   }
-  return json.tabId
+  const opened = await call($, BROWSER, 'navigate', { url })
+  const json = opened.isOk ? (firstJson(opened.text) as { tabId?: unknown } | null) : null
+  if (typeof json?.tabId === 'string') return json.tabId
+  if (!opened.isOk) return null
+  const now = await pane($)
+  return now?.tabs.find(tab => tab.isActive)?.tabId ?? null
 }
 
 export async function navigate($: $, tabId: string, url: string): Promise<boolean> {
