@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.2 (not released)
+## 0.2.2 (2026-11-26)
 
 A full check of 0.2.1: four independent reviews, random-order tests with failing outside calls, and deliberately broken code to see what the tests miss. Everything below was found that way, and each has a test now.
 
