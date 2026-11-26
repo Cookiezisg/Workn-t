@@ -6,6 +6,14 @@
     "name": "Sun Weilin"
   },
   "license": "MIT",
+  "keywords": [
+    "douyin",
+    "tiktok",
+    "video",
+    "break",
+    "browser-pane",
+    "mod"
+  ],
   "types": "./types/index.d.ts",
   "homepage": "https://github.com/Cookiezisg/Workn-t",
   "repository": "https://github.com/Cookiezisg/Workn-t"

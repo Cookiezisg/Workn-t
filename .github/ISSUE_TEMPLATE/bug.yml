@@ -1,0 +1,30 @@
+name: Something is wrong / 出问题了
+description: It did not behave the way the README says. 它的表现和说明不一样。
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What you did, and what happened / 你做了什么，发生了什么
+      description: Step by step, as far as you remember. 尽量一步一步写。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected / 你以为会怎样
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of /worknt doctor
+      description: >-
+        Run it in the session where it went wrong. The last line is a file path with your user name in it; cut that line if you would rather not post it.
+        在出问题的那个会话里运行。最后一行是带系统用户名的文件路径，不想公开就删掉那一行。
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System / 系统
+      placeholder: macOS 15.1, Claude desktop app 1.2.3
